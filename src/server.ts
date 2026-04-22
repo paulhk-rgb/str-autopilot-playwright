@@ -67,11 +67,28 @@ function buildApp(env: ReturnType<typeof readEnv>) {
     res.status(404).json({ error: 'not_found' });
   });
 
-  // Error handler — NEVER 500 on auth issues (hmacAuth already returned 401).
+  // Error handler — handle Express body-parser errors distinctly from unexpected failures.
+  // Codex P1 fix: malformed/oversized JSON previously fell through to a generic 500; classify
+  // body errors as 400/413 so we never conflate client fault with machine fault.
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+    if (res.headersSent) return;
+
+    const e = err as { type?: string; status?: number; statusCode?: number } | undefined;
+    const status = e?.status ?? e?.statusCode;
+
+    // express.json() sets err.type = 'entity.parse.failed' on malformed JSON,
+    // 'entity.too.large' on oversized payloads, 'charset.unsupported' on bad charset.
+    if (status === 400 || e?.type === 'entity.parse.failed' || e?.type === 'charset.unsupported') {
+      res.status(400).json({ error: 'bad_request' });
+      return;
+    }
+    if (status === 413 || e?.type === 'entity.too.large') {
+      res.status(413).json({ error: 'payload_too_large' });
+      return;
+    }
+
     // eslint-disable-next-line no-console
     console.error('Unhandled server error:', err);
-    if (res.headersSent) return;
     res.status(500).json({ error: 'internal_error' });
   });
 

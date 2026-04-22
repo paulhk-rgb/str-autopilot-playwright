@@ -244,6 +244,25 @@ describe('verifyHmacRequest', () => {
     expect(result.reason).toBe('signature_mismatch');
   });
 
+  it('rejects non-UUID nonce', () => {
+    const req = buildSignedRequest({});
+    const result = verifyHmacRequest({
+      method: req.method,
+      path: req.path,
+      bodyBytes: req.body,
+      headers: {
+        signature: req.signature,
+        timestamp: String(req.timestamp),
+        nonce: 'not-a-uuid',
+        hostId: req.hostId,
+      },
+      secretHex: SECRET,
+      expectedHostId: HOST_ID,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe('bad_nonce');
+  });
+
   it('signs and verifies an empty-body GET request', () => {
     const timestamp = Math.floor(Date.now() / 1000);
     const nonce = '00000000-0000-4000-8000-000000000000';

@@ -53,7 +53,13 @@ export function buildCallbackHeaders(opts: {
   };
 }
 
-/** Fetch wrapper with basic retry. Returns the HTTP response object. */
+/** Fetch wrapper with basic retry. Returns the HTTP response object.
+ *
+ * Each retry re-signs with a FRESH timestamp + nonce (Codex P1 fix): the callback verifier
+ * INSERTs nonces into runtime_state on ON CONFLICT DO NOTHING (spec §2.6 step 2b). If a retry
+ * reuses the original nonce, the verifier rejects it as a replay. Body bytes are stable
+ * across retries — only the signature envelope rotates.
+ */
 export async function postCallback(opts: {
   env: MachineEnv;
   body: Record<string, unknown>;
@@ -63,18 +69,21 @@ export async function postCallback(opts: {
   const url = new URL(opts.env.CALLBACK_URL);
   const bodyStr = JSON.stringify(opts.body);
   const bodyBytes = Buffer.from(bodyStr, 'utf8');
-  const headers = buildCallbackHeaders({
-    env: opts.env,
-    method: 'POST',
-    path: url.pathname,
-    bodyBytes,
-  });
 
   const maxRetries = opts.retries ?? 2;
   const timeoutMs = opts.timeoutMs ?? 15_000;
 
   let lastErr: unknown = null;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    // Build fresh headers per attempt so the timestamp is within drift window and the nonce
+    // is unique per attempt (receiver's replay-detect INSERT wouldn't accept a reused nonce).
+    const headers = buildCallbackHeaders({
+      env: opts.env,
+      method: 'POST',
+      path: url.pathname,
+      bodyBytes,
+    });
+
     try {
       const controller = new AbortController();
       const tid = setTimeout(() => controller.abort(), timeoutMs);

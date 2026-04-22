@@ -59,11 +59,10 @@ export function injectCookiesHandler(env: MachineEnv) {
     try {
       ctx = await getBrowserContext({ profileDir: env.PROFILE_DIR });
     } catch (err) {
-      return res.status(500).json({
-        status: 'error',
-        reason: 'browser_failed',
-        detail: err instanceof Error ? err.message : String(err),
-      });
+      // Log server-side; do NOT leak browser internals to the caller.
+      // eslint-disable-next-line no-console
+      console.error('inject-cookies browser_failed:', err);
+      return res.status(500).json({ status: 'error', reason: 'browser_failed' });
     }
 
     // Playwright expects each cookie to have `url` OR (`domain` + `path`). Some older exports
@@ -82,11 +81,9 @@ export function injectCookiesHandler(env: MachineEnv) {
         })),
       );
     } catch (err) {
-      return res.status(400).json({
-        status: 'error',
-        reason: 'invalid_cookies',
-        detail: err instanceof Error ? err.message : String(err),
-      });
+      // eslint-disable-next-line no-console
+      console.error('inject-cookies invalid_cookies:', err);
+      return res.status(400).json({ status: 'error', reason: 'invalid_cookies' });
     }
 
     // Verify session by navigating to the hosting dashboard.
@@ -149,11 +146,9 @@ export function injectCookiesHandler(env: MachineEnv) {
         return res.status(500).json({ status: 'error', reason: 'verify_failed' });
       }
     } catch (err) {
-      return res.status(500).json({
-        status: 'error',
-        reason: 'airbnb_blocked',
-        detail: err instanceof Error ? err.message : String(err),
-      });
+      // eslint-disable-next-line no-console
+      console.error('inject-cookies airbnb_blocked:', err);
+      return res.status(500).json({ status: 'error', reason: 'airbnb_blocked' });
     } finally {
       await page.close().catch(() => undefined);
     }

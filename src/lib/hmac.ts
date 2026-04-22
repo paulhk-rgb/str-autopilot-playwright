@@ -22,6 +22,13 @@ import { createHash, createHmac, timingSafeEqual } from 'crypto';
 
 export const CLOCK_DRIFT_TOLERANCE_SECONDS = 60;
 
+/**
+ * UUID format (any version) — spec §2.6 mandates UUIDv4 for nonces, but we accept any well-formed
+ * UUID to stay forward-compatible with future nonce schemes. The constraint-enforcer is the
+ * server-side nonce replay cache (staysync-app §2.6 step 2b), which dedupes on the full string.
+ */
+const UUID_REGEX = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
 /** SHA-256 hex of the raw body bytes. Empty string hash is used when no body is present. */
 export function sha256Hex(bodyBytes: Uint8Array | Buffer): string {
   return createHash('sha256').update(bodyBytes).digest('hex');
@@ -65,6 +72,7 @@ export interface VerifyResult {
   reason?:
     | 'missing_headers'
     | 'bad_timestamp'
+    | 'bad_nonce'
     | 'clock_drift'
     | 'host_id_mismatch'
     | 'bad_signature_format'
@@ -108,6 +116,10 @@ export function verifyHmacRequest(p: VerifyParams): VerifyResult {
   const tsNum = Number(ts);
   if (!Number.isFinite(tsNum) || !Number.isInteger(tsNum)) {
     return { ok: false, reason: 'bad_timestamp' };
+  }
+
+  if (!UUID_REGEX.test(nonce)) {
+    return { ok: false, reason: 'bad_nonce' };
   }
 
   const now = p.now ?? Math.floor(Date.now() / 1000);

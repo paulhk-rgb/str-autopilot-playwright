@@ -5,11 +5,19 @@
 #
 # Runtime env vars (HOST_ID, HMAC_SECRET, CALLBACK_URL) are injected per-machine at creation
 # time by the provisioner (see spec §2.4 step 1). NOT set here — each machine is per-host.
+#
+# IMAGE PINNING (spec §2.4 step 1 Codex P1-4): Production machines MUST reference the image
+# by @sha256:<digest>, never :latest. This fly.toml uses the mutable :latest tag ONLY for the
+# base-layer push (`fly deploy`-from-source workflows). The staysync-app provisioner passes an
+# explicit pinned digest to the Fly Machines API when spawning per-host VMs (it reads the
+# digest from its own config, NOT from this fly.toml). This tag is a publishing target, not
+# a runtime source of truth.
 
 app = "str-autopilot-playwright"
 primary_region = "iad"
 
 [build]
+  # Publishing target — superseded by pinned @sha256 digest at machine-creation time.
   image = "registry.fly.io/str-autopilot-playwright:latest"
 
 [http_service]
