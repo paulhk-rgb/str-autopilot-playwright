@@ -1,0 +1,25 @@
+node_modules/
+dist/
+build/
+coverage/
+.DS_Store
+*.log
+npm-debug.log*
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Playwright persistent profile (local dev only; production uses Fly volume)
+data/
+*.har
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Build output
+*.tsbuildinfo

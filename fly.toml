@@ -1,0 +1,32 @@
+# Fly.io machine config for str-autopilot-playwright
+# Spec: ~/str-autopilot/specs/DAY4-integration-patterns.md Section 2.4 + Section 5.1
+# One machine per StaySync host. Provisioning is automated via Fly API from staysync-app's
+# playwright-session-provision Inngest function — this fly.toml is the reference config only.
+#
+# Runtime env vars (HOST_ID, HMAC_SECRET, CALLBACK_URL) are injected per-machine at creation
+# time by the provisioner (see spec §2.4 step 1). NOT set here — each machine is per-host.
+
+app = "str-autopilot-playwright"
+primary_region = "iad"
+
+[build]
+  image = "registry.fly.io/str-autopilot-playwright:latest"
+
+[http_service]
+  internal_port = 8080
+  force_https = false  # 6PN private networking, no public IP per spec §2.6
+  auto_stop_machines = false  # persistent per-host per OQ-1 LOCKED
+  min_machines_running = 1
+  processes = ["app"]
+
+[[vm]]
+  memory = "512mb"
+  cpu_kind = "shared"
+  cpus = 1
+
+[checks.health]
+  type = "http"
+  port = 8080
+  path = "/health"
+  interval = "30s"
+  timeout = "5s"

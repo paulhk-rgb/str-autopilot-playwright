@@ -1,0 +1,100 @@
+/**
+ * Persistent Playwright browser context manager.
+ * Spec: ~/str-autopilot/specs/DAY4-integration-patterns.md §2.4 (step 4 inject-cookies, step 5 sync)
+ *
+ * Stealth flags mirror ~/google-scripts/airbnb/playwright-sender/server.js — the proven local
+ * production stack. Airbnb detects headless Chromium; we run headful via Xvfb.
+ */
+
+import { chromium } from 'playwright';
+import type { BrowserContext, Page } from 'playwright';
+
+const STEALTH_ARGS = [
+  '--disable-blink-features=AutomationControlled',
+  '--disable-dev-shm-usage',
+  '--no-sandbox',
+  '--disable-setuid-sandbox',
+];
+
+const IGNORE_DEFAULT_ARGS = ['--enable-automation'];
+
+let ctxPromise: Promise<BrowserContext> | null = null;
+let lastAirbnbRequestAt: Date | null = null;
+
+export interface BrowserOptions {
+  profileDir: string;
+  headless?: boolean; // default: false in production (headful via Xvfb)
+}
+
+export async function getBrowserContext(opts: BrowserOptions): Promise<BrowserContext> {
+  if (ctxPromise) {
+    try {
+      const ctx = await ctxPromise;
+      // Sanity check: calling .pages() throws if context was closed externally.
+      ctx.pages();
+      return ctx;
+    } catch {
+      ctxPromise = null;
+    }
+  }
+
+  ctxPromise = chromium.launchPersistentContext(opts.profileDir, {
+    headless: opts.headless ?? false,
+    viewport: { width: 1280, height: 800 },
+    args: STEALTH_ARGS,
+    ignoreDefaultArgs: IGNORE_DEFAULT_ARGS,
+    // Airbnb's rate-limiter is UA-sensitive — explicit UA avoids headless-chrome fingerprint leakage.
+    userAgent:
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) ' +
+      'Chrome/120.0.0.0 Safari/537.36',
+  });
+
+  const ctx = await ctxPromise;
+  ctx.on('close', () => {
+    ctxPromise = null;
+  });
+  return ctx;
+}
+
+export async function closeBrowserContext(): Promise<void> {
+  if (!ctxPromise) return;
+  try {
+    const ctx = await ctxPromise;
+    await ctx.close();
+  } catch {
+    // already dead
+  } finally {
+    ctxPromise = null;
+  }
+}
+
+/** Mark "last Airbnb request" — reported in /health. */
+export function markAirbnbRequest(): void {
+  lastAirbnbRequestAt = new Date();
+}
+
+export function getLastAirbnbRequestAt(): Date | null {
+  return lastAirbnbRequestAt;
+}
+
+/**
+ * Check whether the persistent context has a valid Airbnb session cookie.
+ * Spec §2.4 step 5 references cookie_valid in /health responses.
+ *
+ * Airbnb's session cookies are `_airbnb_session_id` and `_aat`. Both must be present.
+ * We DO NOT hit airbnb.com on /health — that would generate traffic on every 30s health check.
+ */
+export async function hasAirbnbSession(ctx: BrowserContext): Promise<boolean> {
+  try {
+    const cookies = await ctx.cookies('https://www.airbnb.com');
+    const names = new Set(cookies.map((c) => c.name));
+    return names.has('_airbnb_session_id') && names.has('_aat');
+  } catch {
+    return false;
+  }
+}
+
+/** Open a fresh page reusing the context. Callers MUST await page.close() when done. */
+export async function openPage(ctx: BrowserContext): Promise<Page> {
+  return ctx.newPage();
+}
