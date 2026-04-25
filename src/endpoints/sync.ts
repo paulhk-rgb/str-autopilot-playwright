@@ -28,19 +28,17 @@ import type { Request, Response } from 'express';
 import type { MachineEnv } from '../lib/env';
 import { postCallback } from '../lib/callback';
 import { getBrowserContext, markAirbnbRequest } from '../playwright/browser';
+import { scrapeInbox, type ScrapedMessage } from '../playwright/scrape-inbox';
 
 interface SyncBody {
   host_id: string;
   mode: 'initial' | 'incremental' | 'full';
   since?: string;
-}
-
-interface ScrapedMessage {
-  airbnb_message_id: string;
-  content: string;
-  sender: 'guest' | 'host';
-  timestamp: string;           // ISO8601
-  conversation_airbnb_id: string;
+  // Display name shown on the host's Airbnb profile — used to classify each
+  // scraped message as 'host' vs 'guest' from the aria-label "<Name> sent ..."
+  // pattern. Optional for back-compat; without it, every non-system message
+  // defaults to 'guest' and the saga must reclassify host messages downstream.
+  host_display_name?: string;
 }
 
 const MAX_BATCH_SIZE = 50;
@@ -51,23 +49,8 @@ function isValidSyncBody(body: unknown): body is SyncBody {
   if (typeof b.host_id !== 'string' || b.host_id.length === 0) return false;
   if (b.mode !== 'initial' && b.mode !== 'incremental' && b.mode !== 'full') return false;
   if (b.since !== undefined && typeof b.since !== 'string') return false;
+  if (b.host_display_name !== undefined && typeof b.host_display_name !== 'string') return false;
   return true;
-}
-
-/**
- * Placeholder scraper. Returns an empty list so the callback batching path is exercisable
- * in tests / smoke checks, but no real Airbnb data is fetched. Replace in a follow-up PR
- * with real DOM-driven scraping (see ~/google-scripts/airbnb/playwright-sender/airbnb-sender.js
- * for reference patterns — readConversation() already scrapes thread text in production).
- */
-async function scrapeMessages(_mode: SyncBody['mode'], _since: string | undefined): Promise<{
-  messages: ScrapedMessage[];
-  bookingsFound: number;
-  errors: string[];
-}> {
-  // Empty stub — real implementation deferred.
-  // The plumbing (callback batching, response shape) is what PR 2 locks in.
-  return { messages: [], bookingsFound: 0, errors: [] };
 }
 
 function chunk<T>(arr: T[], size: number): T[][] {
@@ -91,8 +74,9 @@ export function syncHandler(env: MachineEnv) {
     }
 
     // Ensure the browser is up — spec §2.5 step 1 relies on this for cookie validity too.
+    let ctx;
     try {
-      await getBrowserContext({ profileDir: env.PROFILE_DIR });
+      ctx = await getBrowserContext({ profileDir: env.PROFILE_DIR });
     } catch (err) {
       return res.status(500).json({
         messages_found: 0,
@@ -102,7 +86,11 @@ export function syncHandler(env: MachineEnv) {
     }
 
     markAirbnbRequest();
-    const { messages, bookingsFound, errors } = await scrapeMessages(req.body.mode, req.body.since);
+    const { messages, bookingsFound, errors } = await scrapeInbox(ctx, {
+      mode: req.body.mode,
+      since: req.body.since,
+      hostDisplayName: req.body.host_display_name,
+    });
 
     const batches = chunk(messages, MAX_BATCH_SIZE);
     // Always emit at least one batch so the callback handler sees has_more=false closure even
@@ -134,10 +122,12 @@ export function syncHandler(env: MachineEnv) {
       }
     }
 
+    const diag = (globalThis as unknown as { __lastInboxDiag?: unknown }).__lastInboxDiag;
     return res.status(200).json({
       messages_found: messages.length,
       bookings_found: bookingsFound,
       errors: [...errors, ...callbackErrors],
+      diag,
     });
   };
 }
