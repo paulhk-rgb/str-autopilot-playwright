@@ -81,14 +81,14 @@ export function getLastAirbnbRequestAt(): Date | null {
  * Check whether the persistent context has a valid Airbnb session cookie.
  * Spec §2.4 step 5 references cookie_valid in /health responses.
  *
- * Airbnb's session cookies are `_airbnb_session_id` and `_aat`. Both must be present.
+ * Airbnb's session cookies are `_airbed_session_id` and `_aat`. Both must be present.
  * We DO NOT hit airbnb.com on /health — that would generate traffic on every 30s health check.
  */
 export async function hasAirbnbSession(ctx: BrowserContext): Promise<boolean> {
   try {
     const cookies = await ctx.cookies('https://www.airbnb.com');
     const names = new Set(cookies.map((c) => c.name));
-    return names.has('_airbnb_session_id') && names.has('_aat');
+    return names.has('_airbed_session_id') && names.has('_aat');
   } catch {
     return false;
   }

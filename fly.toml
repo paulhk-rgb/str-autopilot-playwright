@@ -17,8 +17,9 @@ app = "str-autopilot-playwright"
 primary_region = "iad"
 
 [build]
-  # Publishing target — superseded by pinned @sha256 digest at machine-creation time.
-  image = "registry.fly.io/str-autopilot-playwright:latest"
+  # First-deploy: build from Dockerfile. After initial push, swap to image ref:
+  # image = "registry.fly.io/str-autopilot-playwright:latest"
+  dockerfile = "Dockerfile"
 
 [http_service]
   internal_port = 8080

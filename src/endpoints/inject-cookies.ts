@@ -23,7 +23,20 @@ interface AirbnbCookie {
   expires?: number;      // unix seconds, -1 = session cookie
   httpOnly?: boolean;
   secure?: boolean;
-  sameSite?: 'Strict' | 'Lax' | 'None';
+  // Browser exports use lowercase ('lax') and Chrome-extension dialect
+  // ('no_restriction', 'unspecified'); normalized via normalizeSameSite below.
+  sameSite?: string | null;
+}
+
+// Browser cookie exports use a wider vocabulary than Playwright accepts.
+// Map all known variants to Playwright's strict 'Strict' | 'Lax' | 'None'.
+function normalizeSameSite(v: unknown): 'Strict' | 'Lax' | 'None' {
+  if (typeof v !== 'string') return 'Lax';
+  const s = v.toLowerCase();
+  if (s === 'strict') return 'Strict';
+  if (s === 'none' || s === 'no_restriction') return 'None';
+  // 'lax', 'unspecified', '', anything else → Chromium default
+  return 'Lax';
 }
 
 interface InjectCookiesBody {
@@ -51,7 +64,7 @@ export function injectCookiesHandler(env: MachineEnv) {
 
     const cookies = req.body.cookies;
     const names = new Set(cookies.map((c) => c.name));
-    if (!names.has('_airbnb_session_id') || !names.has('_aat')) {
+    if (!names.has('_airbed_session_id') || !names.has('_aat')) {
       return res.status(400).json({ status: 'error', reason: 'invalid_cookies' });
     }
 
@@ -77,7 +90,7 @@ export function injectCookiesHandler(env: MachineEnv) {
           expires: typeof c.expires === 'number' ? c.expires : undefined,
           httpOnly: c.httpOnly ?? false,
           secure: c.secure ?? true,
-          sameSite: c.sameSite ?? 'Lax',
+          sameSite: normalizeSameSite(c.sameSite),
         })),
       );
     } catch (err) {
