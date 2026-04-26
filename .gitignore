@@ -23,3 +23,6 @@ data/
 
 # Build output
 *.tsbuildinfo
+
+# Local PII denylist for fixture-verify.sh — never commit (real guest names, host email, etc.)
+scripts/.pii-denylist

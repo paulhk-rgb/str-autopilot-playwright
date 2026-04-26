@@ -1,0 +1,21 @@
+# PII denylist for fixture-verify.sh.
+# Copy this file to .pii-denylist (gitignored) and fill in:
+#   - Real guest first names that appear in your most recent inbox capture
+#   - The host's full name
+#   - The host's email address
+#   - Any other identifiers you want to scan for in fixtures + specs + scripts
+#
+# Format: one term per line. Lines starting with # are comments. Blank lines OK.
+# Matching is case-insensitive whole-word.
+#
+# Regenerate after every fresh fixture-probe.mjs run if your inbox guest list changes.
+
+# === Guest first names (replace with values from your latest probe) ===
+# (intentionally empty — populate from your /tmp/probe-fresh-inbox.json before
+#  running fixture-verify.sh)
+
+# === Host identifiers ===
+# Add the host operator's last name, email, and any handle they use:
+# <LastName>
+# <handle>@<provider>.<tld>
+# <combined-handle>

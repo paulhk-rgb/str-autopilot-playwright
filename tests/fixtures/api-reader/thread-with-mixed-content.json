@@ -1,0 +1,2368 @@
+{
+  "data": {
+    "threadData": {
+      "__typename": "MessageThread",
+      "id": "TWVzc2FnZVRocmVhZDoyNDc2OTU3NDc5",
+      "messageThreadType": "HOME_BOOKING",
+      "localizationData": {
+        "__typename": "MessageThreadLocalizationData",
+        "autoTranslateLocale": "en",
+        "isThreadAutoTranslateEnabled": true,
+        "isThreadTranslationEligible": true
+      },
+      "userThreadTags": [
+        {
+          "__typename": "UserThreadTag",
+          "additionalValues": [
+            "1238734339606310870"
+          ],
+          "userThreadTagName": "stay_listing_ids"
+        },
+        {
+          "__typename": "UserThreadTag",
+          "additionalValues": [
+            "CURRENTLY_HOSTING"
+          ],
+          "userThreadTagName": "trip_stages"
+        },
+        {
+          "__typename": "UserThreadTag",
+          "additionalValues": [],
+          "userThreadTagName": "priority"
+        },
+        {
+          "__typename": "UserThreadTag",
+          "additionalValues": [],
+          "userThreadTagName": "hosting"
+        }
+      ],
+      "inboxTitle": {
+        "__typename": "StandardText",
+        "components": [
+          {
+            "__typename": "StandardTextComponent",
+            "text": "[REDACTED:text]",
+            "type": null
+          }
+        ],
+        "accessibilityText": "[REDACTED:accessibilityText]"
+      },
+      "inboxDescription": {
+        "__typename": "StandardText",
+        "components": [
+          {
+            "__typename": "StandardTextComponent",
+            "text": "[REDACTED:text]",
+            "type": null
+          }
+        ],
+        "accessibilityText": "[REDACTED:accessibilityText]"
+      },
+      "priority": {
+        "__typename": "ThreadPriority",
+        "title": {
+          "__typename": "StandardText",
+          "components": [
+            {
+              "__typename": "StandardTextComponent",
+              "text": "[REDACTED:text]",
+              "type": null
+            }
+          ],
+          "accessibilityText": "[REDACTED:accessibilityText]"
+        }
+      },
+      "inboxListingImageUrl": "https://example.com/fixture-listing.jpg",
+      "inboxProfileImages": [
+        {
+          "__typename": "InboxProfileImage",
+          "image": {
+            "__typename": "InboxImage",
+            "iconName": null,
+            "accessibilityText": "[REDACTED:accessibilityText]",
+            "sourceUrl": "https://example.com/fixture-profile.jpg"
+          }
+        }
+      ],
+      "inboxChips": [],
+      "inboxAccessibilityTemplateText": "[REDACTED:inboxAccessibilityTemplateText]",
+      "inboxItemHighlight": "POSITIVE",
+      "mostRecentInboxActivityAtMsFromROS": "1777155645510",
+      "inboxVisibility": "VISIBLE",
+      "participants": {
+        "__typename": "MessageThreadToMessageThreadParticipantsV2Connection",
+        "edges": [
+          {
+            "__typename": "MessageThreadToMessageThreadParticipantsV2Edge",
+            "node": {
+              "__typename": "UserMessageThreadParticipantV2",
+              "accountId": "697089",
+              "accountType": "USER",
+              "participantRole": "GUEST",
+              "userRoleForLogging": 3,
+              "status": "ACTIVE",
+              "roleDescription": "Booker",
+              "isRealUser": true,
+              "enrichedParticipantInfo": {
+                "__typename": "EnrichedParticipantInfo",
+                "name": "[REDACTED:name]",
+                "threadDisplayName": "[REDACTED:threadDisplayName]",
+                "userProfilePicture": {
+                  "__typename": "UserProfilePicture",
+                  "thumbnailUrlMedium": "https://example.com/fixture-profile.jpg"
+                },
+                "userProfileIcon": null
+              },
+              "productRole": "BOOKER",
+              "contextualUser": {
+                "__typename": "ContextualUser",
+                "id": "Q29udGV4dHVhbFVzZXI6MTQ3MjY0NTAzMzY1NjczNTEzNA=="
+              }
+            }
+          },
+          {
+            "__typename": "MessageThreadToMessageThreadParticipantsV2Edge",
+            "node": {
+              "__typename": "UserMessageThreadParticipantV2",
+              "accountId": "50758264",
+              "accountType": "USER",
+              "participantRole": "HOST",
+              "userRoleForLogging": 1,
+              "status": "ACTIVE",
+              "roleDescription": "Host",
+              "isRealUser": true,
+              "enrichedParticipantInfo": {
+                "__typename": "EnrichedParticipantInfo",
+                "name": "[REDACTED:name]",
+                "threadDisplayName": "[REDACTED:threadDisplayName]",
+                "userProfilePicture": {
+                  "__typename": "UserProfilePicture",
+                  "thumbnailUrlMedium": "https://example.com/fixture-profile.jpg"
+                },
+                "userProfileIcon": null
+              },
+              "productRole": "PRIMARY_HOST",
+              "contextualUser": {
+                "__typename": "ContextualUser",
+                "id": "Q29udGV4dHVhbFVzZXI6MTQ2NTc3OTAxODE1NjM1NTU0Mw=="
+              }
+            }
+          }
+        ]
+      },
+      "messages": {
+        "__typename": "MessageThreadToMessagesConnection",
+        "edges": [
+          {
+            "__typename": "MessageThreadToMessagesEdge",
+            "node": {
+              "__typename": "Message",
+              "id": "TWVzc2FnZTozMDUyMTgxOTA3OA==",
+              "uuid": "d138c7d2-e6d9-4fdc-885f-32188b92a384",
+              "createdAtMs": "1777155446059",
+              "updatedAtMs": "1777155446059",
+              "deletedAtMs": null,
+              "isSoftDelete": null,
+              "account": {
+                "__typename": "ParticipantAccount",
+                "accountId": "697089",
+                "accountType": "USER"
+              },
+              "contentPreview": {
+                "__typename": "MessageContentPreview",
+                "translatedContent": null,
+                "content": "[REDACTED:content]"
+              }
+            }
+          }
+        ]
+      },
+      "lastReactionV2": {
+        "__typename": "MessageReaction",
+        "creator": {
+          "__typename": "ParticipantAccount",
+          "accountType": "USER",
+          "accountId": "50758264"
+        },
+        "emoji": "❤️",
+        "updatedAtMs": "1777155645510",
+        "reactionPreview": {
+          "__typename": "ReactionPreview",
+          "previewContent": "[REDACTED:previewContent]",
+          "previewContentWithAutoTranslatedUGC": "[REDACTED:previewContent]"
+        }
+      },
+      "messageData": {
+        "__typename": "MessagesSegment",
+        "messages": [
+          {
+            "__typename": "Message",
+            "uuid": "7d2f2237-d08a-3c28-869c-8e1246ff49aa",
+            "threadId": "2476957479",
+            "id": "TWVzc2FnZTozMDAyNTI3OTkzOQ==",
+            "opaqueId": "$1$30025279939$1774018797245",
+            "correlationIdentifier": null,
+            "contentType": "VIEWER_BASED_CONTENT",
+            "contentSubType": "STAYS_INSTANT_BOOKED",
+            "hydratedContent": {
+              "__typename": "RichMessage",
+              "contentType": "BULLETIN",
+              "content": {
+                "__typename": "Bulletin",
+                "body": "[REDACTED:body]",
+                "linkText": "[REDACTED:linkText]",
+                "linkAction": null,
+                "linkMessagingAction": {
+                  "__typename": "HomesHostOpenReservationDetailsAction",
+                  "loggingData": {
+                    "__typename": "LoggingEventData",
+                    "eventData": {
+                      "message_thread_id": 2476957479,
+                      "message_unique_identifier": "[REDACTED:message_unique_identifier]",
+                      "message_type": "BulletinContent",
+                      "standard_action_type": "HomesHostOpenReservationDetailsAction",
+                      "reference_type": "STAYS_INSTANT_BOOKED_host",
+                      "reference_id": null,
+                      "template_type": "STAYS_INSTANT_BOOKED",
+                      "position": 0
+                    },
+                    "eventDataSchemaName": "Messaging.V2.InnerMessageAction",
+                    "loggingId": "messaging.message.action"
+                  },
+                  "url": "https://example.com/fixture-url-key",
+                  "urlNewWindowPreference": null,
+                  "confirmationCodeMA": "FIXTURECODE",
+                  "threadId": "2476957479",
+                  "isPending": null
+                }
+              },
+              "captionText": null,
+              "suggestionConfig": null,
+              "loggingExtras": null,
+              "plainText": null
+            },
+            "account": {
+              "__typename": "ParticipantAccount",
+              "accountId": "95",
+              "accountType": "SERVICE"
+            },
+            "captionType": null,
+            "userFlagByViewer": {
+              "__typename": "MessageUserFlag",
+              "flagId": null,
+              "redacted": null
+            },
+            "updatedAtMs": "1774018797245",
+            "createdAtMs": "1774018797245",
+            "deletedAtMs": null,
+            "editedAtMs": null,
+            "isSoftDelete": null,
+            "localClientData": null,
+            "syncCursor": "1672007662314537213",
+            "contextualConfig": {
+              "__typename": "MessageContextualConfig",
+              "menuSections": [
+                {
+                  "__typename": "ContextualConfigMenuSection",
+                  "items": [
+                    {
+                      "__typename": "ContextualConfigMenuItem",
+                      "showIf": {
+                        "__typename": "MessagingSectionReadReceiptConditionData",
+                        "messageId": null
+                      },
+                      "icon": {
+                        "__typename": "MessagingIcon",
+                        "name": "EYE16",
+                        "accessibilityText": "[REDACTED:accessibilityText]"
+                      },
+                      "text": {
+                        "__typename": "I18nText",
+                        "localizedString": "Message read by"
+                      },
+                      "messagingAction": {
+                        "__typename": "MessagingReadReceiptAction",
+                        "loggingData": {
+                          "__typename": "LoggingEventData",
+                          "eventData": {
+                            "message_id": "30025279939",
+                            "thread_id": "2476957479"
+                          },
+                          "eventDataSchemaName": "Messaging.v1.MessageData",
+                          "loggingId": "messaging.thread.readReceipts.menu"
+                        },
+                        "url": "",
+                        "urlNewWindowPreference": null
+                      }
+                    }
+                  ]
+                }
+              ],
+              "showReactionsTray": false
+            },
+            "reactionSummary": {
+              "__typename": "ReactionSummary",
+              "modalData": [],
+              "reactionByCurrentAccount": null,
+              "reactionCounts": [],
+              "deletedReactions": [],
+              "syncCursor": "1672007662314537213"
+            },
+            "parentMessageId": null,
+            "senderInfoOverride": null
+          },
+          {
+            "__typename": "Message",
+            "uuid": "01c2ea73-c8f4-4ca3-ac93-04d7e0d765dc",
+            "threadId": "2476957479",
+            "id": "TWVzc2FnZTozMDA4MTg4MzU0Ng==",
+            "opaqueId": "$1$30081883546$1774384376069",
+            "correlationIdentifier": null,
+            "contentType": "TEXT_CONTENT",
+            "contentSubType": null,
+            "hydratedContent": {
+              "__typename": "RichMessage",
+              "contentType": "TEXT",
+              "content": {
+                "__typename": "MessagingRichText",
+                "body": "[REDACTED:body]",
+                "bodyTranslated": null
+              },
+              "captionText": null,
+              "suggestionConfig": null,
+              "loggingExtras": null,
+              "plainText": null
+            },
+            "account": {
+              "__typename": "ParticipantAccount",
+              "accountId": "50758264",
+              "accountType": "USER"
+            },
+            "captionType": null,
+            "userFlagByViewer": {
+              "__typename": "MessageUserFlag",
+              "flagId": null,
+              "redacted": null
+            },
+            "updatedAtMs": "1774384376069",
+            "createdAtMs": "1774384376069",
+            "deletedAtMs": null,
+            "editedAtMs": null,
+            "isSoftDelete": null,
+            "localClientData": null,
+            "syncCursor": "1672007662314537213",
+            "contextualConfig": {
+              "__typename": "MessageContextualConfig",
+              "menuSections": [
+                {
+                  "__typename": "ContextualConfigMenuSection",
+                  "items": [
+                    {
+                      "__typename": "ContextualConfigMenuItem",
+                      "showIf": null,
+                      "icon": {
+                        "__typename": "MessagingIcon",
+                        "name": "REPLY32",
+                        "accessibilityText": "[REDACTED:accessibilityText]"
+                      },
+                      "text": {
+                        "__typename": "I18nText",
+                        "localizedString": "Reply"
+                      },
+                      "messagingAction": {
+                        "__typename": "MessagingReplyToMessageAction",
+                        "loggingData": {
+                          "__typename": "LoggingEventData",
+                          "eventData": {
+                            "message_id": "30081883546",
+                            "thread_id": "2476957479"
+                          },
+                          "eventDataSchemaName": "Messaging.v1.MessageData",
+                          "loggingId": "messaging.thread.message.reply"
+                        },
+                        "url": "",
+                        "urlNewWindowPreference": null
+                      }
+                    }
+                  ]
+                },
+                {
+                  "__typename": "ContextualConfigMenuSection",
+                  "items": [
+                    {
+                      "__typename": "ContextualConfigMenuItem",
+                      "showIf": {
+                        "__typename": "MessagingSectionReadReceiptConditionData",
+                        "messageId": null
+                      },
+                      "icon": {
+                        "__typename": "MessagingIcon",
+                        "name": "EYE16",
+                        "accessibilityText": "[REDACTED:accessibilityText]"
+                      },
+                      "text": {
+                        "__typename": "I18nText",
+                        "localizedString": "Message read by"
+                      },
+                      "messagingAction": {
+                        "__typename": "MessagingReadReceiptAction",
+                        "loggingData": {
+                          "__typename": "LoggingEventData",
+                          "eventData": {
+                            "message_id": "30081883546",
+                            "thread_id": "2476957479"
+                          },
+                          "eventDataSchemaName": "Messaging.v1.MessageData",
+                          "loggingId": "messaging.thread.readReceipts.menu"
+                        },
+                        "url": "",
+                        "urlNewWindowPreference": null
+                      }
+                    }
+                  ]
+                }
+              ],
+              "showReactionsTray": true
+            },
+            "reactionSummary": {
+              "__typename": "ReactionSummary",
+              "modalData": [],
+              "reactionByCurrentAccount": null,
+              "reactionCounts": [],
+              "deletedReactions": [],
+              "syncCursor": "1672007662314537213"
+            },
+            "parentMessageId": null,
+            "senderInfoOverride": null
+          },
+          {
+            "__typename": "Message",
+            "uuid": "23d183c1-2675-4588-b4c7-88ea41337ce9",
+            "threadId": "2476957479",
+            "id": "TWVzc2FnZTozMDI2Njc2Nzc0OQ==",
+            "opaqueId": "$1$30266767749$1775518782190",
+            "correlationIdentifier": null,
+            "contentType": "TEXT_CONTENT",
+            "contentSubType": null,
+            "hydratedContent": {
+              "__typename": "RichMessage",
+              "contentType": "TEXT",
+              "content": {
+                "__typename": "MessagingRichText",
+                "body": "[REDACTED:body]",
+                "bodyTranslated": null
+              },
+              "captionText": null,
+              "suggestionConfig": null,
+              "loggingExtras": null,
+              "plainText": null
+            },
+            "account": {
+              "__typename": "ParticipantAccount",
+              "accountId": "697089",
+              "accountType": "USER"
+            },
+            "captionType": null,
+            "userFlagByViewer": {
+              "__typename": "MessageUserFlag",
+              "flagId": null,
+              "redacted": null
+            },
+            "updatedAtMs": "1775518782190",
+            "createdAtMs": "1775518782190",
+            "deletedAtMs": null,
+            "editedAtMs": null,
+            "isSoftDelete": null,
+            "localClientData": null,
+            "syncCursor": "1672007662314537213",
+            "contextualConfig": {
+              "__typename": "MessageContextualConfig",
+              "menuSections": [
+                {
+                  "__typename": "ContextualConfigMenuSection",
+                  "items": [
+                    {
+                      "__typename": "ContextualConfigMenuItem",
+                      "showIf": null,
+                      "icon": {
+                        "__typename": "MessagingIcon",
+                        "name": "REPLY32",
+                        "accessibilityText": "[REDACTED:accessibilityText]"
+                      },
+                      "text": {
+                        "__typename": "I18nText",
+                        "localizedString": "Reply"
+                      },
+                      "messagingAction": {
+                        "__typename": "MessagingReplyToMessageAction",
+                        "loggingData": {
+                          "__typename": "LoggingEventData",
+                          "eventData": {
+                            "message_id": "30266767749",
+                            "thread_id": "2476957479"
+                          },
+                          "eventDataSchemaName": "Messaging.v1.MessageData",
+                          "loggingId": "messaging.thread.message.reply"
+                        },
+                        "url": "",
+                        "urlNewWindowPreference": null
+                      }
+                    },
+                    {
+                      "__typename": "ContextualConfigMenuItem",
+                      "showIf": {
+                        "__typename": "MessagingSectionTranslationConditionData",
+                        "_unused": null
+                      },
+                      "icon": {
+                        "__typename": "MessagingIcon",
+                        "name": "FLAG16",
+                        "accessibilityText": "[REDACTED:accessibilityText]"
+                      },
+                      "text": {
+                        "__typename": "I18nText",
+                        "localizedString": "Report translation"
+                      },
+                      "messagingAction": {
+                        "__typename": "MessagingReportTranslationIssueAction",
+                        "loggingData": {
+                          "__typename": "LoggingEventData",
+                          "eventData": {
+                            "message_id": "30266767749",
+                            "thread_id": "2476957479"
+                          },
+                          "eventDataSchemaName": "Messaging.v1.MessageData",
+                          "loggingId": "messaging.thread.message.report_translation_issue"
+                        },
+                        "url": "",
+                        "urlNewWindowPreference": null
+                      }
+                    }
+                  ]
+                },
+                {
+                  "__typename": "ContextualConfigMenuSection",
+                  "items": [
+                    {
+                      "__typename": "ContextualConfigMenuItem",
+                      "showIf": {
+                        "__typename": "MessagingSectionReadReceiptConditionData",
+                        "messageId": null
+                      },
+                      "icon": {
+                        "__typename": "MessagingIcon",
+                        "name": "EYE16",
+                        "accessibilityText": "[REDACTED:accessibilityText]"
+                      },
+                      "text": {
+                        "__typename": "I18nText",
+                        "localizedString": "Message read by"
+                      },
+                      "messagingAction": {
+                        "__typename": "MessagingReadReceiptAction",
+                        "loggingData": {
+                          "__typename": "LoggingEventData",
+                          "eventData": {
+                            "message_id": "30266767749",
+                            "thread_id": "2476957479"
+                          },
+                          "eventDataSchemaName": "Messaging.v1.MessageData",
+                          "loggingId": "messaging.thread.readReceipts.menu"
+                        },
+                        "url": "",
+                        "urlNewWindowPreference": null
+                      }
+                    }
+                  ]
+                }
+              ],
+              "showReactionsTray": true
+            },
+            "reactionSummary": {
+              "__typename": "ReactionSummary",
+              "modalData": [],
+              "reactionByCurrentAccount": null,
+              "reactionCounts": [],
+              "deletedReactions": [],
+              "syncCursor": "1672007662314537213"
+            },
+            "parentMessageId": null,
+            "senderInfoOverride": null
+          },
+          {
+            "__typename": "Message",
+            "uuid": "f92aca2f-ea09-3015-ad9e-86b9653f9bdb",
+            "threadId": "2476957479",
+            "id": "TWVzc2FnZTozMDQ0MzMwNTA5Ng==",
+            "opaqueId": "$1$30443305096$1776647171966",
+            "correlationIdentifier": null,
+            "contentType": "TEMPLATE_CONTENT",
+            "contentSubType": "STAY_ALTERATION_WITHOUT_LISTING_CHANGE_PENDING",
+            "hydratedContent": {
+              "__typename": "RichMessage",
+              "contentType": "MESSAGING_DLS_ACTION_CARD",
+              "content": {
+                "__typename": "MessagingDLSActionCardV1",
+                "accessibilityTextNonNull": "[REDACTED:accessibilityTextNonNull]",
+                "loggingReferenceType": null,
+                "imageryV1": null,
+                "headerV2": {
+                  "__typename": "MessagingActionCardHeaderWrapperV2",
+                  "actionHeader": null,
+                  "tombstoneHeader": {
+                    "__typename": "MessagingActionCardTombstoneHeader",
+                    "title": {
+                      "__typename": "MessagingRichText",
+                      "body": "[REDACTED:body]",
+                      "bodyTranslated": null
+                    },
+                    "kicker": {
+                      "__typename": "MessagingRichText",
+                      "body": "[REDACTED:body]",
+                      "bodyTranslated": null
+                    },
+                    "trailingImagery": {
+                      "__typename": "MessagingActionCardHeaderImagery",
+                      "image": {
+                        "__typename": "MessagingIcon",
+                        "accessibilityText": "[REDACTED:accessibilityText]",
+                        "name": "PERSONLARGE32",
+                        "backgroundColor": null
+                      },
+                      "size": "SMALL"
+                    }
+                  }
+                },
+                "subHeadersV2": null,
+                "actionPanel": null,
+                "dismissScenarios": null
+              },
+              "captionText": null,
+              "suggestionConfig": null,
+              "loggingExtras": null,
+              "plainText": null
+            },
+            "account": {
+              "__typename": "ParticipantAccount",
+              "accountId": "697089",
+              "accountType": "USER"
+            },
+            "captionType": null,
+            "userFlagByViewer": {
+              "__typename": "MessageUserFlag",
+              "flagId": null,
+              "redacted": null
+            },
+            "updatedAtMs": "1776647864788",
+            "createdAtMs": "1776647171966",
+            "deletedAtMs": null,
+            "editedAtMs": null,
+            "isSoftDelete": null,
+            "localClientData": null,
+            "syncCursor": "1672007662314537213",
+            "contextualConfig": {
+              "__typename": "MessageContextualConfig",
+              "menuSections": [
+                {
+                  "__typename": "ContextualConfigMenuSection",
+                  "items": [
+                    {
+                      "__typename": "ContextualConfigMenuItem",
+                      "showIf": {
+                        "__typename": "MessagingSectionReadReceiptConditionData",
+                        "messageId": null
+                      },
+                      "icon": {
+                        "__typename": "MessagingIcon",
+                        "name": "EYE16",
+                        "accessibilityText": "[REDACTED:accessibilityText]"
+                      },
+                      "text": {
+                        "__typename": "I18nText",
+                        "localizedString": "Message read by"
+                      },
+                      "messagingAction": {
+                        "__typename": "MessagingReadReceiptAction",
+                        "loggingData": {
+                          "__typename": "LoggingEventData",
+                          "eventData": {
+                            "message_id": "30443305096",
+                            "thread_id": "2476957479"
+                          },
+                          "eventDataSchemaName": "Messaging.v1.MessageData",
+                          "loggingId": "messaging.thread.readReceipts.menu"
+                        },
+                        "url": "",
+                        "urlNewWindowPreference": null
+                      }
+                    }
+                  ]
+                }
+              ],
+              "showReactionsTray": true
+            },
+            "reactionSummary": {
+              "__typename": "ReactionSummary",
+              "modalData": [],
+              "reactionByCurrentAccount": null,
+              "reactionCounts": [],
+              "deletedReactions": [],
+              "syncCursor": "1672007662314537213"
+            },
+            "parentMessageId": null,
+            "senderInfoOverride": null
+          },
+          {
+            "__typename": "Message",
+            "uuid": "8ef6a309-88f0-4171-850c-e3a9907145aa",
+            "threadId": "2476957479",
+            "id": "TWVzc2FnZTozMDQ0MzMwOTQ5OA==",
+            "opaqueId": "$1$30443309498$1776647208298",
+            "correlationIdentifier": null,
+            "contentType": "TEXT_CONTENT",
+            "contentSubType": null,
+            "hydratedContent": {
+              "__typename": "RichMessage",
+              "contentType": "TEXT",
+              "content": {
+                "__typename": "MessagingRichText",
+                "body": "[REDACTED:body]",
+                "bodyTranslated": null
+              },
+              "captionText": null,
+              "suggestionConfig": null,
+              "loggingExtras": null,
+              "plainText": null
+            },
+            "account": {
+              "__typename": "ParticipantAccount",
+              "accountId": "697089",
+              "accountType": "USER"
+            },
+            "captionType": null,
+            "userFlagByViewer": {
+              "__typename": "MessageUserFlag",
+              "flagId": null,
+              "redacted": null
+            },
+            "updatedAtMs": "1776647208298",
+            "createdAtMs": "1776647208298",
+            "deletedAtMs": null,
+            "editedAtMs": null,
+            "isSoftDelete": null,
+            "localClientData": null,
+            "syncCursor": "1672007662314537213",
+            "contextualConfig": {
+              "__typename": "MessageContextualConfig",
+              "menuSections": [
+                {
+                  "__typename": "ContextualConfigMenuSection",
+                  "items": [
+                    {
+                      "__typename": "ContextualConfigMenuItem",
+                      "showIf": null,
+                      "icon": {
+                        "__typename": "MessagingIcon",
+                        "name": "REPLY32",
+                        "accessibilityText": "[REDACTED:accessibilityText]"
+                      },
+                      "text": {
+                        "__typename": "I18nText",
+                        "localizedString": "Reply"
+                      },
+                      "messagingAction": {
+                        "__typename": "MessagingReplyToMessageAction",
+                        "loggingData": {
+                          "__typename": "LoggingEventData",
+                          "eventData": {
+                            "message_id": "30443309498",
+                            "thread_id": "2476957479"
+                          },
+                          "eventDataSchemaName": "Messaging.v1.MessageData",
+                          "loggingId": "messaging.thread.message.reply"
+                        },
+                        "url": "",
+                        "urlNewWindowPreference": null
+                      }
+                    },
+                    {
+                      "__typename": "ContextualConfigMenuItem",
+                      "showIf": {
+                        "__typename": "MessagingSectionTranslationConditionData",
+                        "_unused": null
+                      },
+                      "icon": {
+                        "__typename": "MessagingIcon",
+                        "name": "FLAG16",
+                        "accessibilityText": "[REDACTED:accessibilityText]"
+                      },
+                      "text": {
+                        "__typename": "I18nText",
+                        "localizedString": "Report translation"
+                      },
+                      "messagingAction": {
+                        "__typename": "MessagingReportTranslationIssueAction",
+                        "loggingData": {
+                          "__typename": "LoggingEventData",
+                          "eventData": {
+                            "message_id": "30443309498",
+                            "thread_id": "2476957479"
+                          },
+                          "eventDataSchemaName": "Messaging.v1.MessageData",
+                          "loggingId": "messaging.thread.message.report_translation_issue"
+                        },
+                        "url": "",
+                        "urlNewWindowPreference": null
+                      }
+                    }
+                  ]
+                },
+                {
+                  "__typename": "ContextualConfigMenuSection",
+                  "items": [
+                    {
+                      "__typename": "ContextualConfigMenuItem",
+                      "showIf": {
+                        "__typename": "MessagingSectionReadReceiptConditionData",
+                        "messageId": null
+                      },
+                      "icon": {
+                        "__typename": "MessagingIcon",
+                        "name": "EYE16",
+                        "accessibilityText": "[REDACTED:accessibilityText]"
+                      },
+                      "text": {
+                        "__typename": "I18nText",
+                        "localizedString": "Message read by"
+                      },
+                      "messagingAction": {
+                        "__typename": "MessagingReadReceiptAction",
+                        "loggingData": {
+                          "__typename": "LoggingEventData",
+                          "eventData": {
+                            "message_id": "30443309498",
+                            "thread_id": "2476957479"
+                          },
+                          "eventDataSchemaName": "Messaging.v1.MessageData",
+                          "loggingId": "messaging.thread.readReceipts.menu"
+                        },
+                        "url": "",
+                        "urlNewWindowPreference": null
+                      }
+                    }
+                  ]
+                }
+              ],
+              "showReactionsTray": true
+            },
+            "reactionSummary": {
+              "__typename": "ReactionSummary",
+              "modalData": [],
+              "reactionByCurrentAccount": null,
+              "reactionCounts": [],
+              "deletedReactions": [],
+              "syncCursor": "1672007662314537213"
+            },
+            "parentMessageId": null,
+            "senderInfoOverride": null
+          },
+          {
+            "__typename": "Message",
+            "uuid": "78122ffb-4f28-3391-bda7-05d92af1888e",
+            "threadId": "2476957479",
+            "id": "TWVzc2FnZTozMDQ0MzM4Nzc1OQ==",
+            "opaqueId": "$1$30443387759$1776647864723",
+            "correlationIdentifier": null,
+            "contentType": "VIEWER_BASED_CONTENT",
+            "contentSubType": "STAY_ALTERATION_WITHOUT_LISTING_CHANGE_ACCEPTED",
+            "hydratedContent": {
+              "__typename": "RichMessage",
+              "contentType": "MESSAGING_DLS_ACTION_CARD",
+              "content": {
+                "__typename": "MessagingDLSActionCardV1",
+                "accessibilityTextNonNull": "[REDACTED:accessibilityTextNonNull]",
+                "loggingReferenceType": null,
+                "imageryV1": null,
+                "headerV2": {
+                  "__typename": "MessagingActionCardHeaderWrapperV2",
+                  "actionHeader": {
+                    "__typename": "MessagingActionCardHeader",
+                    "kicker": {
+                      "__typename": "MessagingRichText",
+                      "body": "[REDACTED:body]",
+                      "bodyTranslated": null
+                    },
+                    "title": {
+                      "__typename": "MessagingRichText",
+                      "body": "[REDACTED:body]",
+                      "bodyTranslated": null
+                    },
+                    "subtitle": null,
+                    "trailingImagery": {
+                      "__typename": "MessagingActionCardHeaderImagery",
+                      "image": {
+                        "__typename": "MessagingIcon",
+                        "accessibilityText": "[REDACTED:accessibilityText]",
+                        "name": "PERSONLARGE32",
+                        "backgroundColor": null
+                      },
+                      "size": "SMALL"
+                    },
+                    "leadingImagery": null
+                  },
+                  "tombstoneHeader": null
+                },
+                "subHeadersV2": null,
+                "actionPanel": {
+                  "__typename": "MessagingButtonPanel",
+                  "type": "FULL_WIDTH",
+                  "buttons": [
+                    {
+                      "__typename": "MessagingButton",
+                      "text": "[REDACTED:text]",
+                      "type": "SECONDARY",
+                      "disabled": false,
+                      "leadingIcon": null,
+                      "action": {
+                        "__typename": "StandardActionData",
+                        "parameters": {
+                          "threadId": "2476957479",
+                          "confirmationCode": "FIXTURECODE"
+                        },
+                        "type": "homes__host__open_reservation_details",
+                        "url": "https://example.com/fixture-airbnb-link",
+                        "urlNewWindowPreference": null,
+                        "loggingEventData": {
+                          "__typename": "StandardActionLoggingEventData",
+                          "eventData": {
+                            "message_thread_id": 2476957479,
+                            "message_unique_identifier": "[REDACTED:message_unique_identifier]",
+                            "message_type": "UNKNOWN",
+                            "position": 0,
+                            "standard_action_type": "homes__host__open_reservation_details",
+                            "reference_type": null,
+                            "reference_id": null,
+                            "extras": {
+                              "threadId": "2476957479",
+                              "confirmationCode": "FIXTURECODE"
+                            },
+                            "template_type": "STAY_ALTERATION_WITHOUT_LISTING_CHANGE_ACCEPTED"
+                          },
+                          "eventDataSchemaName": "Messaging.V2.InnerMessageAction",
+                          "loggingId": "messaging.message.action"
+                        }
+                      },
+                      "messagingAction": {
+                        "__typename": "HomesHostOpenReservationDetailsAction",
+                        "loggingData": {
+                          "__typename": "LoggingEventData",
+                          "eventData": {
+                            "message_thread_id": 2476957479,
+                            "message_unique_identifier": "[REDACTED:message_unique_identifier]",
+                            "message_type": "UNKNOWN",
+                            "standard_action_type": "HomesHostOpenReservationDetailsAction",
+                            "reference_type": null,
+                            "reference_id": null,
+                            "template_type": "STAY_ALTERATION_WITHOUT_LISTING_CHANGE_ACCEPTED"
+                          },
+                          "eventDataSchemaName": "Messaging.V2.InnerMessageAction",
+                          "loggingId": "messaging.message.action"
+                        },
+                        "url": "https://example.com/fixture-airbnb-link",
+                        "urlNewWindowPreference": null,
+                        "confirmationCodeMA": "FIXTURECODE",
+                        "threadId": "2476957479",
+                        "isPending": null
+                      }
+                    }
+                  ]
+                },
+                "dismissScenarios": null
+              },
+              "captionText": null,
+              "suggestionConfig": null,
+              "loggingExtras": null,
+              "plainText": null
+            },
+            "account": {
+              "__typename": "ParticipantAccount",
+              "accountId": "50758264",
+              "accountType": "USER"
+            },
+            "captionType": null,
+            "userFlagByViewer": {
+              "__typename": "MessageUserFlag",
+              "flagId": null,
+              "redacted": null
+            },
+            "updatedAtMs": "1776647864723",
+            "createdAtMs": "1776647864723",
+            "deletedAtMs": null,
+            "editedAtMs": null,
+            "isSoftDelete": null,
+            "localClientData": null,
+            "syncCursor": "1672007662314537213",
+            "contextualConfig": {
+              "__typename": "MessageContextualConfig",
+              "menuSections": [
+                {
+                  "__typename": "ContextualConfigMenuSection",
+                  "items": [
+                    {
+                      "__typename": "ContextualConfigMenuItem",
+                      "showIf": {
+                        "__typename": "MessagingSectionReadReceiptConditionData",
+                        "messageId": null
+                      },
+                      "icon": {
+                        "__typename": "MessagingIcon",
+                        "name": "EYE16",
+                        "accessibilityText": "[REDACTED:accessibilityText]"
+                      },
+                      "text": {
+                        "__typename": "I18nText",
+                        "localizedString": "Message read by"
+                      },
+                      "messagingAction": {
+                        "__typename": "MessagingReadReceiptAction",
+                        "loggingData": {
+                          "__typename": "LoggingEventData",
+                          "eventData": {
+                            "message_id": "30443387759",
+                            "thread_id": "2476957479"
+                          },
+                          "eventDataSchemaName": "Messaging.v1.MessageData",
+                          "loggingId": "messaging.thread.readReceipts.menu"
+                        },
+                        "url": "",
+                        "urlNewWindowPreference": null
+                      }
+                    }
+                  ]
+                }
+              ],
+              "showReactionsTray": true
+            },
+            "reactionSummary": {
+              "__typename": "ReactionSummary",
+              "modalData": [],
+              "reactionByCurrentAccount": null,
+              "reactionCounts": [],
+              "deletedReactions": [],
+              "syncCursor": "1672007662314537213"
+            },
+            "parentMessageId": null,
+            "senderInfoOverride": null
+          },
+          {
+            "__typename": "Message",
+            "uuid": "e5aa4d79-27c8-33e1-8df9-e32fab5278d9",
+            "threadId": "2476957479",
+            "id": "TWVzc2FnZTozMDQ0MzQyMDE1NQ==",
+            "opaqueId": "$1$30443420155$1776648147998",
+            "correlationIdentifier": null,
+            "contentType": "TEXT_CONTENT",
+            "contentSubType": null,
+            "hydratedContent": {
+              "__typename": "RichMessage",
+              "contentType": "TEXT",
+              "content": {
+                "__typename": "MessagingRichText",
+                "body": "[REDACTED:body]",
+                "bodyTranslated": null
+              },
+              "captionText": null,
+              "suggestionConfig": null,
+              "loggingExtras": null,
+              "plainText": null
+            },
+            "account": {
+              "__typename": "ParticipantAccount",
+              "accountId": "50758264",
+              "accountType": "USER"
+            },
+            "captionType": null,
+            "userFlagByViewer": {
+              "__typename": "MessageUserFlag",
+              "flagId": null,
+              "redacted": null
+            },
+            "updatedAtMs": "1776648147998",
+            "createdAtMs": "1776648147998",
+            "deletedAtMs": null,
+            "editedAtMs": null,
+            "isSoftDelete": null,
+            "localClientData": null,
+            "syncCursor": "1672007662314537213",
+            "contextualConfig": {
+              "__typename": "MessageContextualConfig",
+              "menuSections": [
+                {
+                  "__typename": "ContextualConfigMenuSection",
+                  "items": [
+                    {
+                      "__typename": "ContextualConfigMenuItem",
+                      "showIf": null,
+                      "icon": {
+                        "__typename": "MessagingIcon",
+                        "name": "REPLY32",
+                        "accessibilityText": "[REDACTED:accessibilityText]"
+                      },
+                      "text": {
+                        "__typename": "I18nText",
+                        "localizedString": "Reply"
+                      },
+                      "messagingAction": {
+                        "__typename": "MessagingReplyToMessageAction",
+                        "loggingData": {
+                          "__typename": "LoggingEventData",
+                          "eventData": {
+                            "message_id": "30443420155",
+                            "thread_id": "2476957479"
+                          },
+                          "eventDataSchemaName": "Messaging.v1.MessageData",
+                          "loggingId": "messaging.thread.message.reply"
+                        },
+                        "url": "",
+                        "urlNewWindowPreference": null
+                      }
+                    }
+                  ]
+                },
+                {
+                  "__typename": "ContextualConfigMenuSection",
+                  "items": [
+                    {
+                      "__typename": "ContextualConfigMenuItem",
+                      "showIf": {
+                        "__typename": "MessagingSectionReadReceiptConditionData",
+                        "messageId": null
+                      },
+                      "icon": {
+                        "__typename": "MessagingIcon",
+                        "name": "EYE16",
+                        "accessibilityText": "[REDACTED:accessibilityText]"
+                      },
+                      "text": {
+                        "__typename": "I18nText",
+                        "localizedString": "Message read by"
+                      },
+                      "messagingAction": {
+                        "__typename": "MessagingReadReceiptAction",
+                        "loggingData": {
+                          "__typename": "LoggingEventData",
+                          "eventData": {
+                            "message_id": "30443420155",
+                            "thread_id": "2476957479"
+                          },
+                          "eventDataSchemaName": "Messaging.v1.MessageData",
+                          "loggingId": "messaging.thread.readReceipts.menu"
+                        },
+                        "url": "",
+                        "urlNewWindowPreference": null
+                      }
+                    }
+                  ]
+                }
+              ],
+              "showReactionsTray": true
+            },
+            "reactionSummary": {
+              "__typename": "ReactionSummary",
+              "modalData": [],
+              "reactionByCurrentAccount": null,
+              "reactionCounts": [],
+              "deletedReactions": [],
+              "syncCursor": "1672007662314537213"
+            },
+            "parentMessageId": null,
+            "senderInfoOverride": null
+          },
+          {
+            "__typename": "Message",
+            "uuid": "98676680-ee48-48bd-b194-f08704225414",
+            "threadId": "2476957479",
+            "id": "TWVzc2FnZTozMDQ5NDYyMjA2NQ==",
+            "opaqueId": "$1$30494622065$1776986544878",
+            "correlationIdentifier": null,
+            "contentType": "TEXT_CONTENT",
+            "contentSubType": null,
+            "hydratedContent": {
+              "__typename": "RichMessage",
+              "contentType": "TEXT",
+              "content": {
+                "__typename": "MessagingRichText",
+                "body": "[REDACTED:body]",
+                "bodyTranslated": null
+              },
+              "captionText": null,
+              "suggestionConfig": null,
+              "loggingExtras": null,
+              "plainText": null
+            },
+            "account": {
+              "__typename": "ParticipantAccount",
+              "accountId": "697089",
+              "accountType": "USER"
+            },
+            "captionType": null,
+            "userFlagByViewer": {
+              "__typename": "MessageUserFlag",
+              "flagId": null,
+              "redacted": null
+            },
+            "updatedAtMs": "1776986544878",
+            "createdAtMs": "1776986544878",
+            "deletedAtMs": null,
+            "editedAtMs": null,
+            "isSoftDelete": null,
+            "localClientData": null,
+            "syncCursor": "1672007662314537213",
+            "contextualConfig": {
+              "__typename": "MessageContextualConfig",
+              "menuSections": [
+                {
+                  "__typename": "ContextualConfigMenuSection",
+                  "items": [
+                    {
+                      "__typename": "ContextualConfigMenuItem",
+                      "showIf": null,
+                      "icon": {
+                        "__typename": "MessagingIcon",
+                        "name": "REPLY32",
+                        "accessibilityText": "[REDACTED:accessibilityText]"
+                      },
+                      "text": {
+                        "__typename": "I18nText",
+                        "localizedString": "Reply"
+                      },
+                      "messagingAction": {
+                        "__typename": "MessagingReplyToMessageAction",
+                        "loggingData": {
+                          "__typename": "LoggingEventData",
+                          "eventData": {
+                            "message_id": "30494622065",
+                            "thread_id": "2476957479"
+                          },
+                          "eventDataSchemaName": "Messaging.v1.MessageData",
+                          "loggingId": "messaging.thread.message.reply"
+                        },
+                        "url": "",
+                        "urlNewWindowPreference": null
+                      }
+                    },
+                    {
+                      "__typename": "ContextualConfigMenuItem",
+                      "showIf": {
+                        "__typename": "MessagingSectionTranslationConditionData",
+                        "_unused": null
+                      },
+                      "icon": {
+                        "__typename": "MessagingIcon",
+                        "name": "FLAG16",
+                        "accessibilityText": "[REDACTED:accessibilityText]"
+                      },
+                      "text": {
+                        "__typename": "I18nText",
+                        "localizedString": "Report translation"
+                      },
+                      "messagingAction": {
+                        "__typename": "MessagingReportTranslationIssueAction",
+                        "loggingData": {
+                          "__typename": "LoggingEventData",
+                          "eventData": {
+                            "message_id": "30494622065",
+                            "thread_id": "2476957479"
+                          },
+                          "eventDataSchemaName": "Messaging.v1.MessageData",
+                          "loggingId": "messaging.thread.message.report_translation_issue"
+                        },
+                        "url": "",
+                        "urlNewWindowPreference": null
+                      }
+                    }
+                  ]
+                },
+                {
+                  "__typename": "ContextualConfigMenuSection",
+                  "items": [
+                    {
+                      "__typename": "ContextualConfigMenuItem",
+                      "showIf": {
+                        "__typename": "MessagingSectionReadReceiptConditionData",
+                        "messageId": null
+                      },
+                      "icon": {
+                        "__typename": "MessagingIcon",
+                        "name": "EYE16",
+                        "accessibilityText": "[REDACTED:accessibilityText]"
+                      },
+                      "text": {
+                        "__typename": "I18nText",
+                        "localizedString": "Message read by"
+                      },
+                      "messagingAction": {
+                        "__typename": "MessagingReadReceiptAction",
+                        "loggingData": {
+                          "__typename": "LoggingEventData",
+                          "eventData": {
+                            "message_id": "30494622065",
+                            "thread_id": "2476957479"
+                          },
+                          "eventDataSchemaName": "Messaging.v1.MessageData",
+                          "loggingId": "messaging.thread.readReceipts.menu"
+                        },
+                        "url": "",
+                        "urlNewWindowPreference": null
+                      }
+                    }
+                  ]
+                }
+              ],
+              "showReactionsTray": true
+            },
+            "reactionSummary": {
+              "__typename": "ReactionSummary",
+              "modalData": [],
+              "reactionByCurrentAccount": null,
+              "reactionCounts": [],
+              "deletedReactions": [],
+              "syncCursor": "1672007662314537213"
+            },
+            "parentMessageId": null,
+            "senderInfoOverride": null
+          },
+          {
+            "__typename": "Message",
+            "uuid": "08e5024a-a4c4-36fb-ad1d-72ccb27ced4b",
+            "threadId": "2476957479",
+            "id": "TWVzc2FnZTozMDQ5NjM4NzU4OA==",
+            "opaqueId": "$1$30496387588$1776999667599",
+            "correlationIdentifier": null,
+            "contentType": "TEXT_CONTENT",
+            "contentSubType": null,
+            "hydratedContent": {
+              "__typename": "RichMessage",
+              "contentType": "TEXT",
+              "content": {
+                "__typename": "MessagingRichText",
+                "body": "[REDACTED:body]",
+                "bodyTranslated": null
+              },
+              "captionText": null,
+              "suggestionConfig": null,
+              "loggingExtras": null,
+              "plainText": null
+            },
+            "account": {
+              "__typename": "ParticipantAccount",
+              "accountId": "50758264",
+              "accountType": "USER"
+            },
+            "captionType": null,
+            "userFlagByViewer": {
+              "__typename": "MessageUserFlag",
+              "flagId": null,
+              "redacted": null
+            },
+            "updatedAtMs": "1776999667599",
+            "createdAtMs": "1776999667599",
+            "deletedAtMs": null,
+            "editedAtMs": null,
+            "isSoftDelete": null,
+            "localClientData": null,
+            "syncCursor": "1672007662314537213",
+            "contextualConfig": {
+              "__typename": "MessageContextualConfig",
+              "menuSections": [
+                {
+                  "__typename": "ContextualConfigMenuSection",
+                  "items": [
+                    {
+                      "__typename": "ContextualConfigMenuItem",
+                      "showIf": null,
+                      "icon": {
+                        "__typename": "MessagingIcon",
+                        "name": "REPLY32",
+                        "accessibilityText": "[REDACTED:accessibilityText]"
+                      },
+                      "text": {
+                        "__typename": "I18nText",
+                        "localizedString": "Reply"
+                      },
+                      "messagingAction": {
+                        "__typename": "MessagingReplyToMessageAction",
+                        "loggingData": {
+                          "__typename": "LoggingEventData",
+                          "eventData": {
+                            "message_id": "30496387588",
+                            "thread_id": "2476957479"
+                          },
+                          "eventDataSchemaName": "Messaging.v1.MessageData",
+                          "loggingId": "messaging.thread.message.reply"
+                        },
+                        "url": "",
+                        "urlNewWindowPreference": null
+                      }
+                    }
+                  ]
+                },
+                {
+                  "__typename": "ContextualConfigMenuSection",
+                  "items": [
+                    {
+                      "__typename": "ContextualConfigMenuItem",
+                      "showIf": {
+                        "__typename": "MessagingSectionReadReceiptConditionData",
+                        "messageId": null
+                      },
+                      "icon": {
+                        "__typename": "MessagingIcon",
+                        "name": "EYE16",
+                        "accessibilityText": "[REDACTED:accessibilityText]"
+                      },
+                      "text": {
+                        "__typename": "I18nText",
+                        "localizedString": "Message read by"
+                      },
+                      "messagingAction": {
+                        "__typename": "MessagingReadReceiptAction",
+                        "loggingData": {
+                          "__typename": "LoggingEventData",
+                          "eventData": {
+                            "message_id": "30496387588",
+                            "thread_id": "2476957479"
+                          },
+                          "eventDataSchemaName": "Messaging.v1.MessageData",
+                          "loggingId": "messaging.thread.readReceipts.menu"
+                        },
+                        "url": "",
+                        "urlNewWindowPreference": null
+                      }
+                    }
+                  ]
+                }
+              ],
+              "showReactionsTray": true
+            },
+            "reactionSummary": {
+              "__typename": "ReactionSummary",
+              "modalData": [],
+              "reactionByCurrentAccount": null,
+              "reactionCounts": [],
+              "deletedReactions": [],
+              "syncCursor": "1672007662314537213"
+            },
+            "parentMessageId": null,
+            "senderInfoOverride": null
+          },
+          {
+            "__typename": "Message",
+            "uuid": "1bf5dfb8-6261-4d0c-bdc4-cb27754cc72a",
+            "threadId": "2476957479",
+            "id": "TWVzc2FnZTozMDUwMDU1ODU4Mw==",
+            "opaqueId": "$1$30500558583$1777032145122",
+            "correlationIdentifier": null,
+            "contentType": "TEXT_CONTENT",
+            "contentSubType": null,
+            "hydratedContent": {
+              "__typename": "RichMessage",
+              "contentType": "TEXT",
+              "content": {
+                "__typename": "MessagingRichText",
+                "body": "[REDACTED:body]",
+                "bodyTranslated": null
+              },
+              "captionText": null,
+              "suggestionConfig": null,
+              "loggingExtras": null,
+              "plainText": null
+            },
+            "account": {
+              "__typename": "ParticipantAccount",
+              "accountId": "697089",
+              "accountType": "USER"
+            },
+            "captionType": null,
+            "userFlagByViewer": {
+              "__typename": "MessageUserFlag",
+              "flagId": null,
+              "redacted": null
+            },
+            "updatedAtMs": "1777032145122",
+            "createdAtMs": "1777032145122",
+            "deletedAtMs": null,
+            "editedAtMs": null,
+            "isSoftDelete": null,
+            "localClientData": null,
+            "syncCursor": "1672007662314537213",
+            "contextualConfig": {
+              "__typename": "MessageContextualConfig",
+              "menuSections": [
+                {
+                  "__typename": "ContextualConfigMenuSection",
+                  "items": [
+                    {
+                      "__typename": "ContextualConfigMenuItem",
+                      "showIf": null,
+                      "icon": {
+                        "__typename": "MessagingIcon",
+                        "name": "REPLY32",
+                        "accessibilityText": "[REDACTED:accessibilityText]"
+                      },
+                      "text": {
+                        "__typename": "I18nText",
+                        "localizedString": "Reply"
+                      },
+                      "messagingAction": {
+                        "__typename": "MessagingReplyToMessageAction",
+                        "loggingData": {
+                          "__typename": "LoggingEventData",
+                          "eventData": {
+                            "message_id": "30500558583",
+                            "thread_id": "2476957479"
+                          },
+                          "eventDataSchemaName": "Messaging.v1.MessageData",
+                          "loggingId": "messaging.thread.message.reply"
+                        },
+                        "url": "",
+                        "urlNewWindowPreference": null
+                      }
+                    },
+                    {
+                      "__typename": "ContextualConfigMenuItem",
+                      "showIf": {
+                        "__typename": "MessagingSectionTranslationConditionData",
+                        "_unused": null
+                      },
+                      "icon": {
+                        "__typename": "MessagingIcon",
+                        "name": "FLAG16",
+                        "accessibilityText": "[REDACTED:accessibilityText]"
+                      },
+                      "text": {
+                        "__typename": "I18nText",
+                        "localizedString": "Report translation"
+                      },
+                      "messagingAction": {
+                        "__typename": "MessagingReportTranslationIssueAction",
+                        "loggingData": {
+                          "__typename": "LoggingEventData",
+                          "eventData": {
+                            "message_id": "30500558583",
+                            "thread_id": "2476957479"
+                          },
+                          "eventDataSchemaName": "Messaging.v1.MessageData",
+                          "loggingId": "messaging.thread.message.report_translation_issue"
+                        },
+                        "url": "",
+                        "urlNewWindowPreference": null
+                      }
+                    }
+                  ]
+                },
+                {
+                  "__typename": "ContextualConfigMenuSection",
+                  "items": [
+                    {
+                      "__typename": "ContextualConfigMenuItem",
+                      "showIf": {
+                        "__typename": "MessagingSectionReadReceiptConditionData",
+                        "messageId": null
+                      },
+                      "icon": {
+                        "__typename": "MessagingIcon",
+                        "name": "EYE16",
+                        "accessibilityText": "[REDACTED:accessibilityText]"
+                      },
+                      "text": {
+                        "__typename": "I18nText",
+                        "localizedString": "Message read by"
+                      },
+                      "messagingAction": {
+                        "__typename": "MessagingReadReceiptAction",
+                        "loggingData": {
+                          "__typename": "LoggingEventData",
+                          "eventData": {
+                            "message_id": "30500558583",
+                            "thread_id": "2476957479"
+                          },
+                          "eventDataSchemaName": "Messaging.v1.MessageData",
+                          "loggingId": "messaging.thread.readReceipts.menu"
+                        },
+                        "url": "",
+                        "urlNewWindowPreference": null
+                      }
+                    }
+                  ]
+                }
+              ],
+              "showReactionsTray": true
+            },
+            "reactionSummary": {
+              "__typename": "ReactionSummary",
+              "modalData": [],
+              "reactionByCurrentAccount": null,
+              "reactionCounts": [],
+              "deletedReactions": [],
+              "syncCursor": "1672007662314537213"
+            },
+            "parentMessageId": null,
+            "senderInfoOverride": null
+          },
+          {
+            "__typename": "Message",
+            "uuid": "7e5017ec-706d-4d11-8b92-7657de111c6c",
+            "threadId": "2476957479",
+            "id": "TWVzc2FnZTozMDUyMTcxNTc1Nw==",
+            "opaqueId": "$1$30521715757$1777154739465",
+            "correlationIdentifier": null,
+            "contentType": "TEXT_CONTENT",
+            "contentSubType": null,
+            "hydratedContent": {
+              "__typename": "RichMessage",
+              "contentType": "TEXT",
+              "content": {
+                "__typename": "MessagingRichText",
+                "body": "[REDACTED:body]",
+                "bodyTranslated": null
+              },
+              "captionText": null,
+              "suggestionConfig": null,
+              "loggingExtras": null,
+              "plainText": null
+            },
+            "account": {
+              "__typename": "ParticipantAccount",
+              "accountId": "697089",
+              "accountType": "USER"
+            },
+            "captionType": null,
+            "userFlagByViewer": {
+              "__typename": "MessageUserFlag",
+              "flagId": null,
+              "redacted": null
+            },
+            "updatedAtMs": "1777154739465",
+            "createdAtMs": "1777154739465",
+            "deletedAtMs": null,
+            "editedAtMs": null,
+            "isSoftDelete": null,
+            "localClientData": null,
+            "syncCursor": "1672007662314537213",
+            "contextualConfig": {
+              "__typename": "MessageContextualConfig",
+              "menuSections": [
+                {
+                  "__typename": "ContextualConfigMenuSection",
+                  "items": [
+                    {
+                      "__typename": "ContextualConfigMenuItem",
+                      "showIf": null,
+                      "icon": {
+                        "__typename": "MessagingIcon",
+                        "name": "REPLY32",
+                        "accessibilityText": "[REDACTED:accessibilityText]"
+                      },
+                      "text": {
+                        "__typename": "I18nText",
+                        "localizedString": "Reply"
+                      },
+                      "messagingAction": {
+                        "__typename": "MessagingReplyToMessageAction",
+                        "loggingData": {
+                          "__typename": "LoggingEventData",
+                          "eventData": {
+                            "message_id": "30521715757",
+                            "thread_id": "2476957479"
+                          },
+                          "eventDataSchemaName": "Messaging.v1.MessageData",
+                          "loggingId": "messaging.thread.message.reply"
+                        },
+                        "url": "",
+                        "urlNewWindowPreference": null
+                      }
+                    },
+                    {
+                      "__typename": "ContextualConfigMenuItem",
+                      "showIf": {
+                        "__typename": "MessagingSectionTranslationConditionData",
+                        "_unused": null
+                      },
+                      "icon": {
+                        "__typename": "MessagingIcon",
+                        "name": "FLAG16",
+                        "accessibilityText": "[REDACTED:accessibilityText]"
+                      },
+                      "text": {
+                        "__typename": "I18nText",
+                        "localizedString": "Report translation"
+                      },
+                      "messagingAction": {
+                        "__typename": "MessagingReportTranslationIssueAction",
+                        "loggingData": {
+                          "__typename": "LoggingEventData",
+                          "eventData": {
+                            "message_id": "30521715757",
+                            "thread_id": "2476957479"
+                          },
+                          "eventDataSchemaName": "Messaging.v1.MessageData",
+                          "loggingId": "messaging.thread.message.report_translation_issue"
+                        },
+                        "url": "",
+                        "urlNewWindowPreference": null
+                      }
+                    }
+                  ]
+                },
+                {
+                  "__typename": "ContextualConfigMenuSection",
+                  "items": [
+                    {
+                      "__typename": "ContextualConfigMenuItem",
+                      "showIf": {
+                        "__typename": "MessagingSectionReadReceiptConditionData",
+                        "messageId": null
+                      },
+                      "icon": {
+                        "__typename": "MessagingIcon",
+                        "name": "EYE16",
+                        "accessibilityText": "[REDACTED:accessibilityText]"
+                      },
+                      "text": {
+                        "__typename": "I18nText",
+                        "localizedString": "Message read by"
+                      },
+                      "messagingAction": {
+                        "__typename": "MessagingReadReceiptAction",
+                        "loggingData": {
+                          "__typename": "LoggingEventData",
+                          "eventData": {
+                            "message_id": "30521715757",
+                            "thread_id": "2476957479"
+                          },
+                          "eventDataSchemaName": "Messaging.v1.MessageData",
+                          "loggingId": "messaging.thread.readReceipts.menu"
+                        },
+                        "url": "",
+                        "urlNewWindowPreference": null
+                      }
+                    }
+                  ]
+                }
+              ],
+              "showReactionsTray": true
+            },
+            "reactionSummary": {
+              "__typename": "ReactionSummary",
+              "modalData": [],
+              "reactionByCurrentAccount": null,
+              "reactionCounts": [],
+              "deletedReactions": [],
+              "syncCursor": "1672007662314537213"
+            },
+            "parentMessageId": null,
+            "senderInfoOverride": null
+          },
+          {
+            "__typename": "Message",
+            "uuid": "3453b675-c52b-456d-a90f-3be24951f6c1",
+            "threadId": "2476957479",
+            "id": "TWVzc2FnZTozMDUyMTcyMDM5OA==",
+            "opaqueId": "$1$30521720398$1777154771045",
+            "correlationIdentifier": null,
+            "contentType": "TEXT_CONTENT",
+            "contentSubType": null,
+            "hydratedContent": {
+              "__typename": "RichMessage",
+              "contentType": "TEXT",
+              "content": {
+                "__typename": "MessagingRichText",
+                "body": "[REDACTED:body]",
+                "bodyTranslated": null
+              },
+              "captionText": null,
+              "suggestionConfig": null,
+              "loggingExtras": null,
+              "plainText": null
+            },
+            "account": {
+              "__typename": "ParticipantAccount",
+              "accountId": "50758264",
+              "accountType": "USER"
+            },
+            "captionType": null,
+            "userFlagByViewer": {
+              "__typename": "MessageUserFlag",
+              "flagId": null,
+              "redacted": null
+            },
+            "updatedAtMs": "1777154771045",
+            "createdAtMs": "1777154771045",
+            "deletedAtMs": null,
+            "editedAtMs": null,
+            "isSoftDelete": null,
+            "localClientData": null,
+            "syncCursor": "1672007662314537213",
+            "contextualConfig": {
+              "__typename": "MessageContextualConfig",
+              "menuSections": [
+                {
+                  "__typename": "ContextualConfigMenuSection",
+                  "items": [
+                    {
+                      "__typename": "ContextualConfigMenuItem",
+                      "showIf": null,
+                      "icon": {
+                        "__typename": "MessagingIcon",
+                        "name": "REPLY32",
+                        "accessibilityText": "[REDACTED:accessibilityText]"
+                      },
+                      "text": {
+                        "__typename": "I18nText",
+                        "localizedString": "Reply"
+                      },
+                      "messagingAction": {
+                        "__typename": "MessagingReplyToMessageAction",
+                        "loggingData": {
+                          "__typename": "LoggingEventData",
+                          "eventData": {
+                            "message_id": "30521720398",
+                            "thread_id": "2476957479"
+                          },
+                          "eventDataSchemaName": "Messaging.v1.MessageData",
+                          "loggingId": "messaging.thread.message.reply"
+                        },
+                        "url": "",
+                        "urlNewWindowPreference": null
+                      }
+                    }
+                  ]
+                },
+                {
+                  "__typename": "ContextualConfigMenuSection",
+                  "items": [
+                    {
+                      "__typename": "ContextualConfigMenuItem",
+                      "showIf": {
+                        "__typename": "MessagingSectionReadReceiptConditionData",
+                        "messageId": null
+                      },
+                      "icon": {
+                        "__typename": "MessagingIcon",
+                        "name": "EYE16",
+                        "accessibilityText": "[REDACTED:accessibilityText]"
+                      },
+                      "text": {
+                        "__typename": "I18nText",
+                        "localizedString": "Message read by"
+                      },
+                      "messagingAction": {
+                        "__typename": "MessagingReadReceiptAction",
+                        "loggingData": {
+                          "__typename": "LoggingEventData",
+                          "eventData": {
+                            "message_id": "30521720398",
+                            "thread_id": "2476957479"
+                          },
+                          "eventDataSchemaName": "Messaging.v1.MessageData",
+                          "loggingId": "messaging.thread.readReceipts.menu"
+                        },
+                        "url": "",
+                        "urlNewWindowPreference": null
+                      }
+                    }
+                  ]
+                }
+              ],
+              "showReactionsTray": true
+            },
+            "reactionSummary": {
+              "__typename": "ReactionSummary",
+              "modalData": [],
+              "reactionByCurrentAccount": null,
+              "reactionCounts": [],
+              "deletedReactions": [],
+              "syncCursor": "1672007662314537213"
+            },
+            "parentMessageId": null,
+            "senderInfoOverride": null
+          },
+          {
+            "__typename": "Message",
+            "uuid": "2db19f89-39b7-434f-9e76-5865a915678b",
+            "threadId": "2476957479",
+            "id": "TWVzc2FnZTozMDUyMTczNzEyNw==",
+            "opaqueId": "$1$30521737127$1777154878007",
+            "correlationIdentifier": null,
+            "contentType": "TEXT_CONTENT",
+            "contentSubType": null,
+            "hydratedContent": {
+              "__typename": "RichMessage",
+              "contentType": "TEXT",
+              "content": {
+                "__typename": "MessagingRichText",
+                "body": "[REDACTED:body]",
+                "bodyTranslated": null
+              },
+              "captionText": null,
+              "suggestionConfig": null,
+              "loggingExtras": null,
+              "plainText": null
+            },
+            "account": {
+              "__typename": "ParticipantAccount",
+              "accountId": "697089",
+              "accountType": "USER"
+            },
+            "captionType": null,
+            "userFlagByViewer": {
+              "__typename": "MessageUserFlag",
+              "flagId": null,
+              "redacted": null
+            },
+            "updatedAtMs": "1777154878007",
+            "createdAtMs": "1777154878007",
+            "deletedAtMs": null,
+            "editedAtMs": null,
+            "isSoftDelete": null,
+            "localClientData": null,
+            "syncCursor": "1672007662314537213",
+            "contextualConfig": {
+              "__typename": "MessageContextualConfig",
+              "menuSections": [
+                {
+                  "__typename": "ContextualConfigMenuSection",
+                  "items": [
+                    {
+                      "__typename": "ContextualConfigMenuItem",
+                      "showIf": null,
+                      "icon": {
+                        "__typename": "MessagingIcon",
+                        "name": "REPLY32",
+                        "accessibilityText": "[REDACTED:accessibilityText]"
+                      },
+                      "text": {
+                        "__typename": "I18nText",
+                        "localizedString": "Reply"
+                      },
+                      "messagingAction": {
+                        "__typename": "MessagingReplyToMessageAction",
+                        "loggingData": {
+                          "__typename": "LoggingEventData",
+                          "eventData": {
+                            "message_id": "30521737127",
+                            "thread_id": "2476957479"
+                          },
+                          "eventDataSchemaName": "Messaging.v1.MessageData",
+                          "loggingId": "messaging.thread.message.reply"
+                        },
+                        "url": "",
+                        "urlNewWindowPreference": null
+                      }
+                    },
+                    {
+                      "__typename": "ContextualConfigMenuItem",
+                      "showIf": {
+                        "__typename": "MessagingSectionTranslationConditionData",
+                        "_unused": null
+                      },
+                      "icon": {
+                        "__typename": "MessagingIcon",
+                        "name": "FLAG16",
+                        "accessibilityText": "[REDACTED:accessibilityText]"
+                      },
+                      "text": {
+                        "__typename": "I18nText",
+                        "localizedString": "Report translation"
+                      },
+                      "messagingAction": {
+                        "__typename": "MessagingReportTranslationIssueAction",
+                        "loggingData": {
+                          "__typename": "LoggingEventData",
+                          "eventData": {
+                            "message_id": "30521737127",
+                            "thread_id": "2476957479"
+                          },
+                          "eventDataSchemaName": "Messaging.v1.MessageData",
+                          "loggingId": "messaging.thread.message.report_translation_issue"
+                        },
+                        "url": "",
+                        "urlNewWindowPreference": null
+                      }
+                    }
+                  ]
+                },
+                {
+                  "__typename": "ContextualConfigMenuSection",
+                  "items": [
+                    {
+                      "__typename": "ContextualConfigMenuItem",
+                      "showIf": {
+                        "__typename": "MessagingSectionReadReceiptConditionData",
+                        "messageId": null
+                      },
+                      "icon": {
+                        "__typename": "MessagingIcon",
+                        "name": "EYE16",
+                        "accessibilityText": "[REDACTED:accessibilityText]"
+                      },
+                      "text": {
+                        "__typename": "I18nText",
+                        "localizedString": "Message read by"
+                      },
+                      "messagingAction": {
+                        "__typename": "MessagingReadReceiptAction",
+                        "loggingData": {
+                          "__typename": "LoggingEventData",
+                          "eventData": {
+                            "message_id": "30521737127",
+                            "thread_id": "2476957479"
+                          },
+                          "eventDataSchemaName": "Messaging.v1.MessageData",
+                          "loggingId": "messaging.thread.readReceipts.menu"
+                        },
+                        "url": "",
+                        "urlNewWindowPreference": null
+                      }
+                    }
+                  ]
+                }
+              ],
+              "showReactionsTray": true
+            },
+            "reactionSummary": {
+              "__typename": "ReactionSummary",
+              "modalData": [],
+              "reactionByCurrentAccount": null,
+              "reactionCounts": [],
+              "deletedReactions": [],
+              "syncCursor": "1672007662314537213"
+            },
+            "parentMessageId": null,
+            "senderInfoOverride": null
+          },
+          {
+            "__typename": "Message",
+            "uuid": "5f97e712-e690-456e-a61f-cc57c41a720f",
+            "threadId": "2476957479",
+            "id": "TWVzc2FnZTozMDUyMTczODI4NA==",
+            "opaqueId": "$1$30521738284$1777154885746",
+            "correlationIdentifier": null,
+            "contentType": "TEXT_CONTENT",
+            "contentSubType": null,
+            "hydratedContent": {
+              "__typename": "RichMessage",
+              "contentType": "TEXT",
+              "content": {
+                "__typename": "MessagingRichText",
+                "body": "[REDACTED:body]",
+                "bodyTranslated": null
+              },
+              "captionText": null,
+              "suggestionConfig": null,
+              "loggingExtras": null,
+              "plainText": null
+            },
+            "account": {
+              "__typename": "ParticipantAccount",
+              "accountId": "50758264",
+              "accountType": "USER"
+            },
+            "captionType": null,
+            "userFlagByViewer": {
+              "__typename": "MessageUserFlag",
+              "flagId": null,
+              "redacted": null
+            },
+            "updatedAtMs": "1777154885746",
+            "createdAtMs": "1777154885746",
+            "deletedAtMs": null,
+            "editedAtMs": null,
+            "isSoftDelete": null,
+            "localClientData": null,
+            "syncCursor": "1672007662314537213",
+            "contextualConfig": {
+              "__typename": "MessageContextualConfig",
+              "menuSections": [
+                {
+                  "__typename": "ContextualConfigMenuSection",
+                  "items": [
+                    {
+                      "__typename": "ContextualConfigMenuItem",
+                      "showIf": null,
+                      "icon": {
+                        "__typename": "MessagingIcon",
+                        "name": "REPLY32",
+                        "accessibilityText": "[REDACTED:accessibilityText]"
+                      },
+                      "text": {
+                        "__typename": "I18nText",
+                        "localizedString": "Reply"
+                      },
+                      "messagingAction": {
+                        "__typename": "MessagingReplyToMessageAction",
+                        "loggingData": {
+                          "__typename": "LoggingEventData",
+                          "eventData": {
+                            "message_id": "30521738284",
+                            "thread_id": "2476957479"
+                          },
+                          "eventDataSchemaName": "Messaging.v1.MessageData",
+                          "loggingId": "messaging.thread.message.reply"
+                        },
+                        "url": "",
+                        "urlNewWindowPreference": null
+                      }
+                    }
+                  ]
+                },
+                {
+                  "__typename": "ContextualConfigMenuSection",
+                  "items": [
+                    {
+                      "__typename": "ContextualConfigMenuItem",
+                      "showIf": {
+                        "__typename": "MessagingSectionReadReceiptConditionData",
+                        "messageId": null
+                      },
+                      "icon": {
+                        "__typename": "MessagingIcon",
+                        "name": "EYE16",
+                        "accessibilityText": "[REDACTED:accessibilityText]"
+                      },
+                      "text": {
+                        "__typename": "I18nText",
+                        "localizedString": "Message read by"
+                      },
+                      "messagingAction": {
+                        "__typename": "MessagingReadReceiptAction",
+                        "loggingData": {
+                          "__typename": "LoggingEventData",
+                          "eventData": {
+                            "message_id": "30521738284",
+                            "thread_id": "2476957479"
+                          },
+                          "eventDataSchemaName": "Messaging.v1.MessageData",
+                          "loggingId": "messaging.thread.readReceipts.menu"
+                        },
+                        "url": "",
+                        "urlNewWindowPreference": null
+                      }
+                    }
+                  ]
+                }
+              ],
+              "showReactionsTray": true
+            },
+            "reactionSummary": {
+              "__typename": "ReactionSummary",
+              "modalData": [],
+              "reactionByCurrentAccount": null,
+              "reactionCounts": [],
+              "deletedReactions": [],
+              "syncCursor": "1672007662314537213"
+            },
+            "parentMessageId": null,
+            "senderInfoOverride": null
+          },
+          {
+            "__typename": "Message",
+            "uuid": "d138c7d2-e6d9-4fdc-885f-32188b92a384",
+            "threadId": "2476957479",
+            "id": "TWVzc2FnZTozMDUyMTgxOTA3OA==",
+            "opaqueId": "$1$30521819078$1777155446059",
+            "correlationIdentifier": null,
+            "contentType": "TEXT_CONTENT",
+            "contentSubType": null,
+            "hydratedContent": {
+              "__typename": "RichMessage",
+              "contentType": "TEXT",
+              "content": {
+                "__typename": "MessagingRichText",
+                "body": "[REDACTED:body]",
+                "bodyTranslated": null
+              },
+              "captionText": null,
+              "suggestionConfig": null,
+              "loggingExtras": null,
+              "plainText": null
+            },
+            "account": {
+              "__typename": "ParticipantAccount",
+              "accountId": "697089",
+              "accountType": "USER"
+            },
+            "captionType": null,
+            "userFlagByViewer": {
+              "__typename": "MessageUserFlag",
+              "flagId": null,
+              "redacted": null
+            },
+            "updatedAtMs": "1777155446059",
+            "createdAtMs": "1777155446059",
+            "deletedAtMs": null,
+            "editedAtMs": null,
+            "isSoftDelete": null,
+            "localClientData": null,
+            "syncCursor": "1672007662314537213",
+            "contextualConfig": {
+              "__typename": "MessageContextualConfig",
+              "menuSections": [
+                {
+                  "__typename": "ContextualConfigMenuSection",
+                  "items": [
+                    {
+                      "__typename": "ContextualConfigMenuItem",
+                      "showIf": null,
+                      "icon": {
+                        "__typename": "MessagingIcon",
+                        "name": "REPLY32",
+                        "accessibilityText": "[REDACTED:accessibilityText]"
+                      },
+                      "text": {
+                        "__typename": "I18nText",
+                        "localizedString": "Reply"
+                      },
+                      "messagingAction": {
+                        "__typename": "MessagingReplyToMessageAction",
+                        "loggingData": {
+                          "__typename": "LoggingEventData",
+                          "eventData": {
+                            "message_id": "30521819078",
+                            "thread_id": "2476957479"
+                          },
+                          "eventDataSchemaName": "Messaging.v1.MessageData",
+                          "loggingId": "messaging.thread.message.reply"
+                        },
+                        "url": "",
+                        "urlNewWindowPreference": null
+                      }
+                    },
+                    {
+                      "__typename": "ContextualConfigMenuItem",
+                      "showIf": {
+                        "__typename": "MessagingSectionTranslationConditionData",
+                        "_unused": null
+                      },
+                      "icon": {
+                        "__typename": "MessagingIcon",
+                        "name": "FLAG16",
+                        "accessibilityText": "[REDACTED:accessibilityText]"
+                      },
+                      "text": {
+                        "__typename": "I18nText",
+                        "localizedString": "Report translation"
+                      },
+                      "messagingAction": {
+                        "__typename": "MessagingReportTranslationIssueAction",
+                        "loggingData": {
+                          "__typename": "LoggingEventData",
+                          "eventData": {
+                            "message_id": "30521819078",
+                            "thread_id": "2476957479"
+                          },
+                          "eventDataSchemaName": "Messaging.v1.MessageData",
+                          "loggingId": "messaging.thread.message.report_translation_issue"
+                        },
+                        "url": "",
+                        "urlNewWindowPreference": null
+                      }
+                    }
+                  ]
+                },
+                {
+                  "__typename": "ContextualConfigMenuSection",
+                  "items": [
+                    {
+                      "__typename": "ContextualConfigMenuItem",
+                      "showIf": {
+                        "__typename": "MessagingSectionReadReceiptConditionData",
+                        "messageId": null
+                      },
+                      "icon": {
+                        "__typename": "MessagingIcon",
+                        "name": "EYE16",
+                        "accessibilityText": "[REDACTED:accessibilityText]"
+                      },
+                      "text": {
+                        "__typename": "I18nText",
+                        "localizedString": "Message read by"
+                      },
+                      "messagingAction": {
+                        "__typename": "MessagingReadReceiptAction",
+                        "loggingData": {
+                          "__typename": "LoggingEventData",
+                          "eventData": {
+                            "message_id": "30521819078",
+                            "thread_id": "2476957479"
+                          },
+                          "eventDataSchemaName": "Messaging.v1.MessageData",
+                          "loggingId": "messaging.thread.readReceipts.menu"
+                        },
+                        "url": "",
+                        "urlNewWindowPreference": null
+                      }
+                    }
+                  ]
+                }
+              ],
+              "showReactionsTray": true
+            },
+            "reactionSummary": {
+              "__typename": "ReactionSummary",
+              "modalData": [
+                {
+                  "__typename": "MessageReaction",
+                  "creator": {
+                    "__typename": "ParticipantAccount",
+                    "accountType": "USER",
+                    "accountId": "50758264"
+                  },
+                  "emoji": "❤️",
+                  "updatedAtMs": "1777155645510",
+                  "reactionPreview": {
+                    "__typename": "ReactionPreview",
+                    "previewContent": "[REDACTED:previewContent]",
+                    "previewContentWithAutoTranslatedUGC": "[REDACTED:previewContent]"
+                  }
+                }
+              ],
+              "reactionByCurrentAccount": {
+                "__typename": "CurrentUserReaction",
+                "emoji": "❤️"
+              },
+              "reactionCounts": [
+                {
+                  "__typename": "ReactionCount",
+                  "count": 1,
+                  "emoji": "❤️"
+                }
+              ],
+              "deletedReactions": [],
+              "syncCursor": "1672007662314537213"
+            },
+            "parentMessageId": null,
+            "senderInfoOverride": null
+          }
+        ],
+        "expandedMessagesSegment": {
+          "__typename": "ThreadMessagesSegment",
+          "earliestMessageId": "30025279939",
+          "latestMessageId": "30521819078"
+        },
+        "expandedCursorsSegment": {
+          "__typename": "ThreadCursorsSegment",
+          "earliestCursor": "1672007662314537213",
+          "latestCursor": "1672007662314537213"
+        },
+        "upToDate": false,
+        "hasOlder": "NO",
+        "hasNewer": "NO"
+      }
+    }
+  },
+  "extensions": {
+    "traceId": "FbfSyPB1_eBnskqG7Gg7Cg=="
+  }
+}
