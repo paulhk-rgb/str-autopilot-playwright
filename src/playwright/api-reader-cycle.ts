@@ -63,7 +63,13 @@ export interface CycleOptions {
 
 export interface ShadowDiagnostic {
   cycleId: string;
-  uiBatchTimedOut: boolean;
+  /** Canonical UI message ID count (form: `airbnb-${numericId}`). */
+  uiCanonicalCount: number;
+  /** UI rows whose ID didn't match the canonical form (e.g. content-hash fallback
+   *  from scrape-inbox.ts when DOM data-item-id was absent). Excluded from the
+   *  equivalence gate per audit. */
+  uiNonCanonicalCount: number;
+  apiCanonicalCount: number;
   uiToApiIdMatches: number;
   uiToApiIdMismatches: number;
   onlyInUi: string[];
@@ -282,7 +288,9 @@ export async function runApiReaderCycle(
       // advance the watermark.
       shadow = {
         cycleId,
-        uiBatchTimedOut: true,
+        uiCanonicalCount: 0,
+        uiNonCanonicalCount: 0,
+        apiCanonicalCount: apiMessagesAccum.length,
         uiToApiIdMatches: 0,
         uiToApiIdMismatches: 0,
         onlyInUi: [],

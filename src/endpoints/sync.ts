@@ -119,10 +119,9 @@ export function syncHandler(env: MachineEnv) {
       errors.push(...uiResult.errors);
     } else if (env.INBOX_READER_MODE === 'shadow') {
       // Run UI THEN API sequentially to avoid execution-context collisions
-      // on the shared page (Gemini v0.3 audit: parallel runs trip Playwright
-      // when UI scraper navigates between threads). UI remains sole callback
-      // emitter; API output lives in diag/log only. v0.4 wiring will add the
-      // proper UI→API batch handoff for the shadow comparator.
+      // on the shared page. UI remains sole callback emitter; API output is
+      // compared against UI inline (v0.4 prerequisite — real shadow gate)
+      // and surfaced in apiDiag for the 3-day promotion gate.
       const uiResult = await scrapeInbox(ctx, {
         mode: req.body.mode,
         since: req.body.since,
@@ -131,7 +130,7 @@ export function syncHandler(env: MachineEnv) {
       messages = uiResult.messages;
       bookingsFound = uiResult.bookingsFound;
       errors.push(...uiResult.errors);
-      const apiResult = await runApiReaderShadowCycle(ctx, env);
+      const apiResult = await runApiReaderShadowCycle(ctx, env, uiResult.messages);
       apiDiag = apiResult;
     } else {
       // api mode — API cycle is sole emitter.
@@ -191,19 +190,140 @@ export function syncHandler(env: MachineEnv) {
 }
 
 /**
- * v0.3 helper — runs one API-reader cycle in shadow mode (no callback emission).
- * Returns the diagnostic for inclusion in the /sync response. The shadow
- * comparator gating the watermark advance is supplied here; UI batch handoff
- * is a future enhancement (v0.4 wiring) — for v0.3 the comparator returns an
- * empty intersection so watermarks don't advance from shadow alone, allowing
- * UI scraper progress to be the source of truth during observation.
+ * Compute shadow-mode comparison between UI batch and API batch.
+ *
+ * Per spec §4 step 6 + §9 invariant 9: equivalence gate uses subset
+ * (UI ⊆ API) and zero `onlyInUi` events; `onlyInApi` is tolerated because
+ * UI's DOM virtualizes (~15-20 visible rows per thread) while the API
+ * returns up to 50 per page per thread.
+ *
+ * Returns:
+ *   - advance: per-thread max createdAtMs of the intersection (UI ∩ API).
+ *     Watermark advances only over messages BOTH sides confirmed.
+ *   - diagnostic: counts + onlyInUi[]/onlyInApi[] message IDs (NOT bodies).
+ */
+/**
+ * Canonical message ID form emitted by the API reader: `airbnb-${numericMsgId}`
+ * (decoded from base64 `Message:<numericId>` Relay node-ID per spec §1 DoD).
+ *
+ * The UI scraper emits the same form when DOM `data-item-id` is present, but
+ * has a fallback path (`stableMessageId`) that emits a 32-char hex content
+ * hash for rows without `data-item-id`. Those non-canonical UI IDs are NEVER
+ * comparable to API output and must be excluded from the equivalence gate.
+ *
+ * Codex v0.4-prereq audit Blocker: without this discriminator, every UI
+ * fallback row becomes a phantom `onlyInUi` mismatch and blocks promotion
+ * indefinitely.
+ */
+const CANONICAL_MESSAGE_ID = /^airbnb-\d{6,}$/;
+
+/**
+ * Note on the v0.4-vs-spec deviation: spec §4 step 6 describes an
+ * `awaitUiBatchForCycle(cycleId, timeoutMs=10000)` queue model. v0.4 wires the
+ * UI batch as a synchronous parameter (sequential UI → API in /sync), so a
+ * timeout is structurally impossible at this layer. The queue model belongs to
+ * v0.5+; until then, no `uiBatchTimedOut` field is emitted to avoid confusing
+ * downstream operator tooling (Sonnet v0.4 audit P1 noted hardcoded `false`
+ * misleads consumers).
+ */
+export function computeShadowComparison(
+  uiMessages: ScrapedMessage[],
+  apiMessages: ScrapedMessage[],
+  cycleId: string,
+): {
+  advance: Record<string, number>;
+  diagnostic: {
+    cycleId: string;
+    uiCanonicalCount: number;
+    uiNonCanonicalCount: number;
+    apiCanonicalCount: number;
+    uiToApiIdMatches: number;
+    uiToApiIdMismatches: number;
+    onlyInUi: string[];
+    onlyInApi: string[];
+  };
+} {
+  // Build canonical sets only — non-canonical UI IDs are tracked via count
+  // but excluded from the equivalence gate.
+  const uiCanonical = new Map<string, ScrapedMessage>();
+  let uiNonCanonical = 0;
+  for (const m of uiMessages) {
+    if (CANONICAL_MESSAGE_ID.test(m.airbnb_message_id)) {
+      uiCanonical.set(m.airbnb_message_id, m);
+    } else {
+      uiNonCanonical += 1;
+    }
+  }
+  const apiCanonical = new Map<string, ScrapedMessage>();
+  for (const m of apiMessages) {
+    if (CANONICAL_MESSAGE_ID.test(m.airbnb_message_id)) {
+      apiCanonical.set(m.airbnb_message_id, m);
+    }
+  }
+
+  const onlyInUi: string[] = [];
+  const onlyInApi: string[] = [];
+  for (const id of uiCanonical.keys()) if (!apiCanonical.has(id)) onlyInUi.push(id);
+  for (const id of apiCanonical.keys()) if (!uiCanonical.has(id)) onlyInApi.push(id);
+
+  // Watermark advance: per-thread max createdAtMs across the INTERSECTION only
+  // (Sonnet R2 vacuous-match defense — empty intersection → no advance even if
+  // subset trivially holds because UI batch was empty).
+  const advance: Record<string, number> = {};
+  for (const [id, apiMsg] of apiCanonical.entries()) {
+    if (!uiCanonical.has(id)) continue;
+    const t = Date.parse(apiMsg.timestamp);
+    if (!Number.isFinite(t)) continue;
+    const cur = advance[apiMsg.conversation_airbnb_id];
+    if (typeof cur !== 'number' || t > cur) {
+      advance[apiMsg.conversation_airbnb_id] = t;
+    }
+  }
+
+  return {
+    advance,
+    diagnostic: {
+      cycleId,
+      uiCanonicalCount: uiCanonical.size,
+      uiNonCanonicalCount: uiNonCanonical,
+      apiCanonicalCount: apiCanonical.size,
+      uiToApiIdMatches: uiCanonical.size - onlyInUi.length,
+      uiToApiIdMismatches: onlyInUi.length, // onlyInUi == promotion-blocking mismatches
+      onlyInUi,
+      onlyInApi,
+    },
+  };
+}
+
+/**
+ * v0.4 helper — runs one API-reader cycle in shadow mode with a real
+ * shadow comparator wired to the UI scraper's batch from the same /sync
+ * invocation. Per spec §4 step 6: subset (UI ⊆ API) check + intersection-only
+ * watermark advance.
+ *
+ * UI batch is captured BEFORE this is invoked (see /sync handler shadow
+ * branch); the comparator runs synchronously inside runApiReaderCycle's
+ * post-cycle phase via the shadowCompare callback.
  */
 async function runApiReaderShadowCycle(
   ctx: Awaited<ReturnType<typeof getBrowserContext>>,
   env: MachineEnv,
-): Promise<{ apiSkipReason?: string; messagesEmitted: number; perThread: number }> {
+  uiMessages: ScrapedMessage[],
+): Promise<{
+  apiSkipReason?: string;
+  messagesEmitted: number;
+  perThread: number;
+  shadow?: {
+    cycleId: string;
+    uiBatchSize: number;
+    uiToApiIdMatches: number;
+    uiToApiIdMismatches: number;
+    onlyInUi: string[];
+    onlyInApi: string[];
+    intersectionWatermarkAdvances: number;
+  };
+}> {
   if (!env.AIRBNB_API_USER_ID || !env.AIRBNB_API_GLOBAL_USER_ID) {
-    // Configuration guard — should not reach here per env validation.
     return { apiSkipReason: 'missing_api_user_id', messagesEmitted: 0, perThread: 0 };
   }
   let page;
@@ -215,9 +335,6 @@ async function runApiReaderShadowCycle(
   const spa = ensureSpaListenerOnPage(page);
   const watermarkStore = new WatermarkStore(env.WATERMARKS_PATH);
 
-  // Default shadow comparator: no UI batch known to this thin sidecar surface.
-  // Returns empty advance + diagnostic so v0.3 captures observation traffic
-  // without advancing watermarks. v0.4 wiring will integrate UI batch handoff.
   const outcome = await runApiReaderCycle(page, {
     mode: 'shadow',
     hostNumericId: env.AIRBNB_API_USER_ID,
@@ -227,23 +344,30 @@ async function runApiReaderShadowCycle(
     threadHashFallback: env.AIRBNB_API_THREAD_HASH,
     watermarkStore,
     spa,
-    shadowCompare: async ({ cycleId, apiMessages }) => ({
-      advance: {},
-      diagnostic: {
-        cycleId,
-        uiBatchTimedOut: true,
-        uiToApiIdMatches: 0,
-        uiToApiIdMismatches: 0,
-        onlyInUi: [],
-        onlyInApi: apiMessages.map(m => m.airbnb_message_id),
-      },
-    }),
+    shadowCompare: async ({ cycleId, apiMessages }) => {
+      const { advance, diagnostic } = computeShadowComparison(uiMessages, apiMessages, cycleId);
+      return { advance, diagnostic };
+    },
   });
+
+  const intersectionAdvances = Object.keys(outcome.watermarkAdvancesApplied).length;
 
   return {
     apiSkipReason: outcome.apiSkipReason,
     messagesEmitted: outcome.totalApiMessagesEmitted,
     perThread: outcome.perThread.length,
+    shadow: outcome.shadow
+      ? {
+          cycleId: outcome.shadow.cycleId,
+          uiBatchSize: uiMessages.length,
+          uiToApiIdMatches: outcome.shadow.uiToApiIdMatches,
+          uiToApiIdMismatches: outcome.shadow.uiToApiIdMismatches,
+          // Trim ID lists to first 20 to keep response sizes bounded.
+          onlyInUi: outcome.shadow.onlyInUi.slice(0, 20),
+          onlyInApi: outcome.shadow.onlyInApi.slice(0, 20),
+          intersectionWatermarkAdvances: intersectionAdvances,
+        }
+      : undefined,
   };
 }
 

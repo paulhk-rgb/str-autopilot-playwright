@@ -174,7 +174,7 @@ describe('runApiReaderCycle', () => {
     expect(out.apiSkipReason).toBe('auth_epoch_changed');
   });
 
-  it('shadow mode without comparator surfaces uiBatchTimedOut diagnostic', async () => {
+  it('shadow mode without comparator surfaces no-UI-batch diagnostic', async () => {
     markAuthEpochReady();
     // Inbox returns full fixture (15 threads). Per-thread fetches all return the
     // same threadFixture (will fail identity check for 14 of 15 — but the 1st
@@ -197,7 +197,9 @@ describe('runApiReaderCycle', () => {
     });
     expect(out.ok).toBe(true);
     expect(out.shadow).toBeDefined();
-    expect(out.shadow?.uiBatchTimedOut).toBe(true);
+    // No-comparator misconfiguration: UI canonical count is 0 and onlyInApi
+    // surfaces all API IDs (signals "no UI batch was compared against").
+    expect(out.shadow?.uiCanonicalCount).toBe(0);
     expect(out.shadow?.onlyInApi.length).toBeGreaterThanOrEqual(0);
   });
 
@@ -241,7 +243,9 @@ describe('runApiReaderCycle', () => {
       advance: { [matchingRawId]: 1_700_000_000_000 },
       diagnostic: {
         cycleId: 'x',
-        uiBatchTimedOut: false,
+        uiCanonicalCount: 5,
+        uiNonCanonicalCount: 0,
+        apiCanonicalCount: 5,
         uiToApiIdMatches: 5,
         uiToApiIdMismatches: 0,
         onlyInUi: [],
@@ -264,7 +268,7 @@ describe('runApiReaderCycle', () => {
     expect(out.ok).toBe(true);
     expect(compare).toHaveBeenCalledTimes(1);
     expect(out.watermarkAdvancesApplied[matchingRawId]).toBe(1_700_000_000_000);
-    expect(out.shadow?.uiBatchTimedOut).toBe(false);
+    expect(out.shadow?.uiToApiIdMismatches).toBe(0);
     // Persistence: file written.
     expect(store.load()[matchingRawId]).toBe(1_700_000_000_000);
   });
