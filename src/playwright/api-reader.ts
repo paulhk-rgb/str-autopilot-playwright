@@ -427,7 +427,7 @@ export async function listInboxViaApi(
   type FetchOutcome =
     | { kind: 'json'; body: unknown }
     | { kind: 'auth_http'; status: number } // 401, 403
-    | { kind: 'http_error'; status: number } // other non-2xx
+    | { kind: 'http_error'; status: number; bodyText?: string } // other non-2xx
     | { kind: 'non_json'; status: number }; // 2xx with HTML/text body (e.g. challenge)
 
   let outcome: FetchOutcome;
@@ -440,7 +440,10 @@ export async function listInboxViaApi(
           return { kind: 'auth_http', status };
         }
         if (status < 200 || status >= 300) {
-          return { kind: 'http_error', status };
+          // Capture response body for 404 PQNF detection (mirrors readThreadViaApi).
+          // Cap at 1024 chars per hard rule (no full body logging).
+          const text = await res.text().catch(() => '');
+          return { kind: 'http_error', status, bodyText: text.slice(0, 1024) };
         }
         const text = await res.text();
         try {
@@ -458,8 +461,29 @@ export async function listInboxViaApi(
   switch (outcome.kind) {
     case 'auth_http':
       return { ok: false, reason: 'cookie_invalid', diagnostics: emptyDiag() };
-    case 'http_error':
+    case 'http_error': {
+      // Spec §4 + Codex v0.3 audit: HTTP 404 may carry a PQNF errors envelope.
+      // Detect and surface as persisted_query_not_found so the cycle scheduler
+      // can trigger hash auto-recovery instead of treating it as transient.
+      if (outcome.status === 404 && outcome.bodyText) {
+        try {
+          const parsed = JSON.parse(outcome.bodyText) as Record<string, unknown>;
+          const errs = parsed.errors;
+          if (Array.isArray(errs) && classifyGraphqlErrors(errs) === 'persisted_query_not_found') {
+            return { ok: false, reason: 'persisted_query_not_found', diagnostics: emptyDiag() };
+          }
+        } catch {
+          // Not JSON; fall through to text scan below.
+        }
+        if (
+          outcome.bodyText.includes('PersistedQueryNotFound') ||
+          outcome.bodyText.includes('PERSISTED_QUERY_NOT_FOUND')
+        ) {
+          return { ok: false, reason: 'persisted_query_not_found', diagnostics: emptyDiag() };
+        }
+      }
       return { ok: false, reason: 'http_error', diagnostics: emptyDiag() };
+    }
     case 'non_json':
       // 2xx with HTML body almost always means a PerimeterX/Datadome interstitial
       // or login redirect — treat as cookie failure per spec §4 failure modes.

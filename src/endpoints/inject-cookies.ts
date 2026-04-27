@@ -14,6 +14,7 @@
 import type { Request, Response } from 'express';
 import type { MachineEnv } from '../lib/env';
 import { getBrowserContext, hasAirbnbSession, markAirbnbRequest, openPage } from '../playwright/browser';
+import { beginCookieInject, markAuthEpochReady } from '../playwright/auth-epoch';
 
 interface AirbnbCookie {
   name: string;
@@ -78,6 +79,31 @@ export function injectCookiesHandler(env: MachineEnv) {
       return res.status(500).json({ status: 'error', reason: 'browser_failed' });
     }
 
+    // Spec §2 invariant 7-8 + ADR-007: bump authEpoch BEFORE writing new cookies
+    // so any in-flight read cycle detects the rotation and aborts emission. The
+    // `ready` flag is cleared as part of bumping; only set back to `true` after
+    // post-reload URL verification (see end of this handler).
+    //
+    // Sticky-failure note (audit B1): if any path below returns an error response
+    // without reaching markAuthEpochReady(), `ready=false` persists until the next
+    // successful /inject-cookies. This is BY DESIGN — a failed cookie inject
+    // means the next API-reader cycle should skip to avoid acting on bad state.
+    // The caller (StaySync provisioner) is responsible for retrying on failure.
+    beginCookieInject();
+
+    // Spec §4 cookie-injection contract (P2-F + audit E1): clear any pre-existing
+    // cookies BEFORE adding the new set. Otherwise stale session cookies from a
+    // prior host (e.g. after multi-host rotation, future scope) could coexist with
+    // the new host's, producing ambiguous auth state.
+    try {
+      await ctx.clearCookies();
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('inject-cookies clearCookies_failed:', err);
+      // Continue with addCookies — new values may overwrite by name on the
+      // common case, and the post-add verification step catches genuine breakage.
+    }
+
     // Playwright expects each cookie to have `url` OR (`domain` + `path`). Some older exports
     // omit sameSite; default to 'Lax' to match Chromium defaults.
     try {
@@ -113,6 +139,15 @@ export function injectCookiesHandler(env: MachineEnv) {
       // Heuristic: /login redirect means cookies are invalid/expired.
       const urlAfterNav = page.url();
       if (urlAfterNav.includes('/login') || urlAfterNav.includes('/signup')) {
+        return res.status(401).json({ status: 'error', reason: 'invalid_cookies' });
+      }
+      // Strict positive check (Codex v0.3 audit M2): require URL to actually
+      // contain `/hosting`. A non-login redirect to /, /home, or a challenge
+      // page would otherwise be treated as success. authEpoch.ready=true is
+      // only safe when we KNOW we landed in the host dashboard.
+      if (!urlAfterNav.includes('/hosting')) {
+        // eslint-disable-next-line no-console
+        console.warn(`inject-cookies post-nav URL not /hosting (got non-login redirect)`);
         return res.status(401).json({ status: 'error', reason: 'invalid_cookies' });
       }
 
@@ -171,6 +206,14 @@ export function injectCookiesHandler(env: MachineEnv) {
     if (!ok) {
       return res.status(500).json({ status: 'error', reason: 'verify_failed' });
     }
+
+    // Spec §4 step 2 + P2-F fix: only flip authEpoch.ready=true once we've
+    // verified the post-cookie navigation landed on /hosting (NOT /login).
+    // The `urlAfterNav` check above already validated this; reaching here
+    // implies the navigation succeeded and a session is established. The
+    // /sync handler and any future cycle scheduler now treats subsequent
+    // cycles as eligible.
+    markAuthEpochReady();
 
     return res.status(200).json({ status: 'ok', airbnb_user_id: airbnbUserId });
   };

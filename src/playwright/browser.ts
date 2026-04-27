@@ -53,6 +53,17 @@ export async function getBrowserContext(opts: BrowserOptions): Promise<BrowserCo
   ctx.on('close', () => {
     ctxPromise = null;
   });
+  // Attach SPA listener at the BROWSER-CONTEXT level so any page-navigated
+  // GraphQL traffic (including the inject-cookies /hosting/today probe in
+  // api mode, which skips UI navigations entirely) populates observations.
+  // Per Gemini + Codex v0.3 audit: page-level lazy attach in sync.ts misses
+  // organic SPA traffic when the page that fires the SPA isn't the page the
+  // listener was bound to.
+  try {
+    getSpaListener().installOnContext(ctx);
+  } catch {
+    // Defensive: never let listener wiring block context creation.
+  }
   return ctx;
 }
 
@@ -97,4 +108,30 @@ export async function hasAirbnbSession(ctx: BrowserContext): Promise<boolean> {
 /** Open a fresh page reusing the context. Callers MUST await page.close() when done. */
 export async function openPage(ctx: BrowserContext): Promise<Page> {
   return ctx.newPage();
+}
+
+// ============================================================================
+// SPA observation listener (v0.3) — singleton attached to the persistent context.
+// ============================================================================
+import { SpaListener } from './spa-listener';
+let spaListener: SpaListener | null = null;
+const installedOnPages = new WeakSet<Page>();
+
+/** Lazily-initialized singleton listener used by api-reader-cycle. */
+export function getSpaListener(): SpaListener {
+  if (!spaListener) spaListener = new SpaListener();
+  return spaListener;
+}
+
+/**
+ * Idempotently attach the SPA listener to a page. Safe to call on every /sync —
+ * the listener short-circuits its second install on the same page.
+ */
+export function ensureSpaListenerOnPage(page: Page): SpaListener {
+  const l = getSpaListener();
+  if (!installedOnPages.has(page)) {
+    l.install(page);
+    installedOnPages.add(page);
+  }
+  return l;
 }
