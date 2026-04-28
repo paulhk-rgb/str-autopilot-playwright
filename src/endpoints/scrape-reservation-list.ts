@@ -124,6 +124,16 @@ export function scrapeReservationListHandler(env: MachineEnv) {
     // Auth-epoch readiness MUST be checked before any browser/cookie read so
     // a concurrent /inject-cookies (which sets ready=false BEFORE rewriting
     // cookies) is detected before we can observe a half-rotated state.
+    //
+    // Restart contract: the auth-epoch lives in process memory and starts
+    // ready=false on every Fly machine restart. The persistent profile on
+    // /data/profile may still hold valid Airbnb session cookies, but this
+    // endpoint will return 409 auth_epoch_not_ready until a fresh
+    // /inject-cookies completes. The staysync worker / provisioner saga
+    // is responsible for re-running /inject-cookies before the first
+    // /scrape-reservation-list call against any machine that may have
+    // restarted (matches the existing /sync behaviour). The tests below
+    // pin the post-restart 409 response so the contract is enforced.
     if (!isAuthEpochReady()) {
       return res.status(409).json({ error: 'auth_epoch_not_ready' });
     }
