@@ -8,8 +8,12 @@
  * Request body:
  *   { host_id: string, mode?: 'initial' | 'incremental' | 'full', since?: ISO8601 }
  *
- * Response:
+ * Response (success):
  *   { reservations: Reservation[], scraped_at: ISO8601, account_email: string }
+ *
+ * Error envelope: `{ error: string, message?: string }` — matches /sync.
+ * (The older /inject-cookies endpoint uses `{ status:'error', reason }`;
+ * /sync established the simpler shape and new endpoints follow that.)
  *
  * NOTE: This PR ships the endpoint contract, HMAC integration, and request
  * validation. The real Airbnb /hosting/reservations DOM scrape (status filter,
@@ -21,7 +25,7 @@
 
 import type { Request, Response } from 'express';
 import type { MachineEnv } from '../lib/env';
-import { getBrowserContext, markAirbnbRequest } from '../playwright/browser';
+import { getBrowserContext, hasAirbnbSession } from '../playwright/browser';
 import { scrapeReservationList } from '../playwright/scrape-reservations';
 
 export interface Reservation {
@@ -40,6 +44,10 @@ interface ScrapeReservationListBody {
   since?: string;
 }
 
+function isParsableTimestamp(s: string): boolean {
+  return Number.isFinite(Date.parse(s));
+}
+
 function isValidBody(body: unknown): body is ScrapeReservationListBody {
   if (!body || typeof body !== 'object') return false;
   const b = body as Partial<ScrapeReservationListBody>;
@@ -52,7 +60,10 @@ function isValidBody(body: unknown): body is ScrapeReservationListBody {
   ) {
     return false;
   }
-  if (b.since !== undefined && typeof b.since !== 'string') return false;
+  if (b.since !== undefined) {
+    if (typeof b.since !== 'string') return false;
+    if (!isParsableTimestamp(b.since)) return false;
+  }
   return true;
 }
 
@@ -76,7 +87,9 @@ export function scrapeReservationListHandler(env: MachineEnv) {
       });
     }
 
-    markAirbnbRequest();
+    if (!(await hasAirbnbSession(ctx))) {
+      return res.status(401).json({ error: 'invalid_cookies' });
+    }
 
     try {
       const result = await scrapeReservationList(ctx, {

@@ -33,6 +33,10 @@ export async function scrapeReservationList(
   _ctx: BrowserContext,
   _opts: ScrapeReservationsOptions,
 ): Promise<ScrapeReservationsResult> {
+  // STUB: real scraper will populate `reservations` from /hosting/reservations
+  // and read `accountEmail` from the host's profile meta on /hosting/today.
+  // Until then, accountEmail returns '' — the staysync worker MUST treat empty
+  // as "stub mode, do not blank existing host record" rather than as authoritative.
   return {
     reservations: [],
     scrapedAt: new Date().toISOString(),

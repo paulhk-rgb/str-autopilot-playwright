@@ -13,7 +13,7 @@ import type { MachineEnv } from '../src/lib/env';
 
 vi.mock('../src/playwright/browser', () => ({
   getBrowserContext: vi.fn(),
-  markAirbnbRequest: vi.fn(),
+  hasAirbnbSession: vi.fn(),
 }));
 
 vi.mock('../src/playwright/scrape-reservations', () => ({
@@ -51,7 +51,7 @@ function buildReqRes(body: unknown): { req: Request; res: Response; jsonSpy: Ret
 
 beforeEach(() => {
   vi.mocked(browserModule.getBrowserContext).mockReset();
-  vi.mocked(browserModule.markAirbnbRequest).mockReset();
+  vi.mocked(browserModule.hasAirbnbSession).mockReset();
   vi.mocked(scraperModule.scrapeReservationList).mockReset();
 });
 
@@ -75,6 +75,32 @@ describe('scrapeReservationListHandler', () => {
     expect(statusSpy).toHaveBeenCalledWith(400);
   });
 
+  it('returns 400 when since is not a parsable timestamp', async () => {
+    const { req, res, statusSpy, jsonSpy } = buildReqRes({
+      host_id: HOST_ID,
+      since: 'yesterday',
+    });
+    await scrapeReservationListHandler(env)(req, res);
+    expect(statusSpy).toHaveBeenCalledWith(400);
+    expect(jsonSpy).toHaveBeenCalledWith({ error: 'malformed_body' });
+  });
+
+  it('accepts valid ISO8601 since', async () => {
+    vi.mocked(browserModule.getBrowserContext).mockResolvedValue({} as never);
+    vi.mocked(browserModule.hasAirbnbSession).mockResolvedValue(true);
+    vi.mocked(scraperModule.scrapeReservationList).mockResolvedValue({
+      reservations: [],
+      scrapedAt: '2026-04-28T00:00:00.000Z',
+      accountEmail: '',
+    });
+    const { req, res, statusSpy } = buildReqRes({
+      host_id: HOST_ID,
+      since: '2026-04-01T00:00:00.000Z',
+    });
+    await scrapeReservationListHandler(env)(req, res);
+    expect(statusSpy).toHaveBeenCalledWith(200);
+  });
+
   it('returns 403 when host_id does not match machine HOST_ID', async () => {
     const { req, res, statusSpy, jsonSpy } = buildReqRes({
       host_id: '99999999-9999-9999-9999-999999999999',
@@ -95,8 +121,19 @@ describe('scrapeReservationListHandler', () => {
     );
   });
 
+  it('returns 401 invalid_cookies when no Airbnb session present', async () => {
+    vi.mocked(browserModule.getBrowserContext).mockResolvedValue({} as never);
+    vi.mocked(browserModule.hasAirbnbSession).mockResolvedValue(false);
+    const { req, res, statusSpy, jsonSpy } = buildReqRes({ host_id: HOST_ID, mode: 'incremental' });
+    await scrapeReservationListHandler(env)(req, res);
+    expect(statusSpy).toHaveBeenCalledWith(401);
+    expect(jsonSpy).toHaveBeenCalledWith({ error: 'invalid_cookies' });
+    expect(scraperModule.scrapeReservationList).not.toHaveBeenCalled();
+  });
+
   it('returns 500 with scrape_failed when scraper throws', async () => {
     vi.mocked(browserModule.getBrowserContext).mockResolvedValue({} as never);
+    vi.mocked(browserModule.hasAirbnbSession).mockResolvedValue(true);
     vi.mocked(scraperModule.scrapeReservationList).mockRejectedValue(new Error('dom not found'));
     const { req, res, statusSpy, jsonSpy } = buildReqRes({ host_id: HOST_ID, mode: 'incremental' });
     await scrapeReservationListHandler(env)(req, res);
@@ -108,6 +145,7 @@ describe('scrapeReservationListHandler', () => {
 
   it('returns 200 with reservations + scraped_at + account_email on happy path', async () => {
     vi.mocked(browserModule.getBrowserContext).mockResolvedValue({} as never);
+    vi.mocked(browserModule.hasAirbnbSession).mockResolvedValue(true);
     vi.mocked(scraperModule.scrapeReservationList).mockResolvedValue({
       reservations: [
         {
@@ -143,11 +181,11 @@ describe('scrapeReservationListHandler', () => {
       scraped_at: '2026-04-28T00:00:00.000Z',
       account_email: 'host@example.com',
     });
-    expect(browserModule.markAirbnbRequest).toHaveBeenCalledOnce();
   });
 
   it('defaults mode to incremental when omitted', async () => {
     vi.mocked(browserModule.getBrowserContext).mockResolvedValue({} as never);
+    vi.mocked(browserModule.hasAirbnbSession).mockResolvedValue(true);
     vi.mocked(scraperModule.scrapeReservationList).mockResolvedValue({
       reservations: [],
       scrapedAt: '2026-04-28T00:00:00.000Z',
