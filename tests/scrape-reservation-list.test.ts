@@ -23,6 +23,11 @@ vi.mock('../src/playwright/scrape-reservations', () => ({
 import { scrapeReservationListHandler } from '../src/endpoints/scrape-reservation-list';
 import * as browserModule from '../src/playwright/browser';
 import * as scraperModule from '../src/playwright/scrape-reservations';
+import {
+  _resetAuthEpochForTesting,
+  beginCookieInject,
+  markAuthEpochReady,
+} from '../src/playwright/auth-epoch';
 
 const HOST_ID = '11111111-2222-3333-4444-555555555555';
 
@@ -53,6 +58,10 @@ beforeEach(() => {
   vi.mocked(browserModule.getBrowserContext).mockReset();
   vi.mocked(browserModule.hasAirbnbSession).mockReset();
   vi.mocked(scraperModule.scrapeReservationList).mockReset();
+  // Default to ready epoch; tests that exercise the rotation guard reset/bump as needed.
+  _resetAuthEpochForTesting();
+  beginCookieInject();
+  markAuthEpochReady();
 });
 
 describe('scrapeReservationListHandler', () => {
@@ -83,6 +92,24 @@ describe('scrapeReservationListHandler', () => {
     await scrapeReservationListHandler(env)(req, res);
     expect(statusSpy).toHaveBeenCalledWith(400);
     expect(jsonSpy).toHaveBeenCalledWith({ error: 'malformed_body' });
+  });
+
+  it('returns 400 when since is parsable but not strict ISO8601 (space-separated)', async () => {
+    const { req, res, statusSpy } = buildReqRes({
+      host_id: HOST_ID,
+      since: '2026-04-28 10:30:00',
+    });
+    await scrapeReservationListHandler(env)(req, res);
+    expect(statusSpy).toHaveBeenCalledWith(400);
+  });
+
+  it('returns 400 when since is locale-format date (rejected by strict ISO8601)', async () => {
+    const { req, res, statusSpy } = buildReqRes({
+      host_id: HOST_ID,
+      since: '04/28/2026',
+    });
+    await scrapeReservationListHandler(env)(req, res);
+    expect(statusSpy).toHaveBeenCalledWith(400);
   });
 
   it('accepts valid ISO8601 since', async () => {
@@ -119,6 +146,32 @@ describe('scrapeReservationListHandler', () => {
     expect(jsonSpy).toHaveBeenCalledWith(
       expect.objectContaining({ error: 'browser_failed', message: 'chromium dead' }),
     );
+  });
+
+  it('returns 409 auth_epoch_not_ready when /inject-cookies has not completed', async () => {
+    vi.mocked(browserModule.getBrowserContext).mockResolvedValue({} as never);
+    vi.mocked(browserModule.hasAirbnbSession).mockResolvedValue(true);
+    _resetAuthEpochForTesting();
+    beginCookieInject(); // cookies in flight; ready=false
+    const { req, res, statusSpy, jsonSpy } = buildReqRes({ host_id: HOST_ID });
+    await scrapeReservationListHandler(env)(req, res);
+    expect(statusSpy).toHaveBeenCalledWith(409);
+    expect(jsonSpy).toHaveBeenCalledWith({ error: 'auth_epoch_not_ready' });
+    expect(scraperModule.scrapeReservationList).not.toHaveBeenCalled();
+  });
+
+  it('returns 409 auth_epoch_changed when cookies rotate mid-scrape', async () => {
+    vi.mocked(browserModule.getBrowserContext).mockResolvedValue({} as never);
+    vi.mocked(browserModule.hasAirbnbSession).mockResolvedValue(true);
+    vi.mocked(scraperModule.scrapeReservationList).mockImplementation(async () => {
+      // Simulate cookie rotation while scrape is in flight.
+      beginCookieInject();
+      return { reservations: [], scrapedAt: '2026-04-28T00:00:00.000Z', accountEmail: '' };
+    });
+    const { req, res, statusSpy, jsonSpy } = buildReqRes({ host_id: HOST_ID });
+    await scrapeReservationListHandler(env)(req, res);
+    expect(statusSpy).toHaveBeenCalledWith(409);
+    expect(jsonSpy).toHaveBeenCalledWith({ error: 'auth_epoch_changed' });
   });
 
   it('returns 401 invalid_cookies when no Airbnb session present', async () => {

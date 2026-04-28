@@ -29,6 +29,11 @@ import {
   sha256Hex,
   signHmac,
 } from '../src/lib/hmac';
+import {
+  _resetAuthEpochForTesting,
+  beginCookieInject,
+  markAuthEpochReady,
+} from '../src/playwright/auth-epoch';
 import type { MachineEnv } from '../src/lib/env';
 
 const HMAC_SECRET = '7b2e2f1a0d6c4e6e89ab22c3f4d5e6a7b8c9d0e1f2a3b4c5d6e7f8091a2b3c4d';
@@ -53,6 +58,12 @@ let baseUrl: string;
 let server: ReturnType<ReturnType<typeof buildApp>['listen']>;
 
 beforeAll(async () => {
+  // The handler gates on isAuthEpochReady() so the auth-epoch must be primed
+  // before any test attempts a successful pass-through.
+  _resetAuthEpochForTesting();
+  beginCookieInject();
+  markAuthEpochReady();
+
   const app = buildApp(env);
   await new Promise<void>((resolve) => {
     server = app.listen(0, '127.0.0.1', () => resolve());

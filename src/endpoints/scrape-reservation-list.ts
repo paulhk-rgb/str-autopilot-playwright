@@ -26,6 +26,7 @@
 import type { Request, Response } from 'express';
 import type { MachineEnv } from '../lib/env';
 import { getBrowserContext, hasAirbnbSession } from '../playwright/browser';
+import { currentAuthEpoch, isAuthEpochReady } from '../playwright/auth-epoch';
 import { scrapeReservationList } from '../playwright/scrape-reservations';
 
 export interface Reservation {
@@ -44,8 +45,19 @@ interface ScrapeReservationListBody {
   since?: string;
 }
 
-function isParsableTimestamp(s: string): boolean {
-  return Number.isFinite(Date.parse(s));
+/**
+ * Strict ISO8601 check: parsable AND `Date#toISOString()` round-trips to the
+ * same string. Rejects ambiguous/locale-dependent forms like `'2026-04-28 10:30'`
+ * or `'04/28/2026'` that `Date.parse` would otherwise accept.
+ */
+function isStrictIso8601(s: string): boolean {
+  const t = Date.parse(s);
+  if (!Number.isFinite(t)) return false;
+  try {
+    return new Date(t).toISOString() === s;
+  } catch {
+    return false;
+  }
 }
 
 function isValidBody(body: unknown): body is ScrapeReservationListBody {
@@ -62,7 +74,7 @@ function isValidBody(body: unknown): body is ScrapeReservationListBody {
   }
   if (b.since !== undefined) {
     if (typeof b.since !== 'string') return false;
-    if (!isParsableTimestamp(b.since)) return false;
+    if (!isStrictIso8601(b.since)) return false;
   }
   return true;
 }
@@ -100,12 +112,29 @@ export function scrapeReservationListHandler(env: MachineEnv) {
       return res.status(401).json({ error: 'invalid_cookies' });
     }
 
+    if (!isAuthEpochReady()) {
+      return res.status(409).json({ error: 'auth_epoch_not_ready' });
+    }
+    const epochAtStart = currentAuthEpoch();
+
     try {
       const result = await scrapeReservationList(ctx, {
         mode: req.body.mode ?? 'incremental',
         since: req.body.since,
       });
 
+      if (currentAuthEpoch() !== epochAtStart) {
+        return res.status(409).json({ error: 'auth_epoch_changed' });
+      }
+
+      // Response shape per the staysync historical-sync host worker contract:
+      //   { reservations, scraped_at, account_email, _stub?: true }
+      // The `_stub` flag is a machine-readable signal that the real DOM scraper
+      // is not yet wired (handler forwards it from the scraper layer). Worker
+      // MUST inspect `_stub` and skip persistence of `account_email` (and any
+      // empty fields) when present. Field is removed once the real scraper
+      // lands; consumer parsers must accept its presence today and its absence
+      // tomorrow.
       const body: {
         reservations: Reservation[];
         scraped_at: string;
