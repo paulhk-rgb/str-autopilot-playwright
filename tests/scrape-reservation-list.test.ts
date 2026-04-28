@@ -13,7 +13,7 @@ import type { MachineEnv } from '../src/lib/env';
 
 vi.mock('../src/playwright/browser', () => ({
   getBrowserContext: vi.fn(),
-  hasAirbnbSession: vi.fn(),
+  readAirbnbSessionStrict: vi.fn(),
 }));
 
 vi.mock('../src/playwright/scrape-reservations', () => ({
@@ -67,7 +67,7 @@ function buildReqRes(body: unknown): {
 
 beforeEach(() => {
   vi.mocked(browserModule.getBrowserContext).mockReset();
-  vi.mocked(browserModule.hasAirbnbSession).mockReset();
+  vi.mocked(browserModule.readAirbnbSessionStrict).mockReset();
   vi.mocked(scraperModule.scrapeReservationList).mockReset();
   // Default to ready epoch; tests that exercise the rotation guard reset/bump as needed.
   _resetAuthEpochForTesting();
@@ -123,6 +123,33 @@ describe('scrapeReservationListHandler', () => {
     expect(statusSpy).toHaveBeenCalledWith(400);
   });
 
+  it('returns 400 when since is date-only (contract requires date-time)', async () => {
+    const { req, res, statusSpy } = buildReqRes({
+      host_id: HOST_ID,
+      since: '2026-04-01',
+    });
+    await scrapeReservationListHandler(env)(req, res);
+    expect(statusSpy).toHaveBeenCalledWith(400);
+  });
+
+  it('returns 400 when since is an invalid calendar date that Date.parse silently corrects (2026-02-31Z)', async () => {
+    const { req, res, statusSpy } = buildReqRes({
+      host_id: HOST_ID,
+      since: '2026-02-31T00:00:00Z',
+    });
+    await scrapeReservationListHandler(env)(req, res);
+    expect(statusSpy).toHaveBeenCalledWith(400);
+  });
+
+  it('returns 400 when since is an invalid month (2026-13-01Z)', async () => {
+    const { req, res, statusSpy } = buildReqRes({
+      host_id: HOST_ID,
+      since: '2026-13-01T00:00:00Z',
+    });
+    await scrapeReservationListHandler(env)(req, res);
+    expect(statusSpy).toHaveBeenCalledWith(400);
+  });
+
   it.each([
     ['canonical-Z-millis', '2026-04-01T00:00:00.000Z'],
     ['Z-no-millis', '2026-04-01T00:00:00Z'],
@@ -131,7 +158,7 @@ describe('scrapeReservationListHandler', () => {
     ['Z-microseconds', '2026-04-01T00:00:00.123456Z'],
   ])('accepts %s ISO8601 since: %s', async (_name, since) => {
     vi.mocked(browserModule.getBrowserContext).mockResolvedValue({} as never);
-    vi.mocked(browserModule.hasAirbnbSession).mockResolvedValue(true);
+    vi.mocked(browserModule.readAirbnbSessionStrict).mockResolvedValue(true);
     vi.mocked(scraperModule.scrapeReservationList).mockResolvedValue({
       reservations: [],
       scrapedAt: '2026-04-28T00:00:00.000Z',
@@ -144,7 +171,7 @@ describe('scrapeReservationListHandler', () => {
 
   it('accepts valid ISO8601 since', async () => {
     vi.mocked(browserModule.getBrowserContext).mockResolvedValue({} as never);
-    vi.mocked(browserModule.hasAirbnbSession).mockResolvedValue(true);
+    vi.mocked(browserModule.readAirbnbSessionStrict).mockResolvedValue(true);
     vi.mocked(scraperModule.scrapeReservationList).mockResolvedValue({
       reservations: [],
       scrapedAt: '2026-04-28T00:00:00.000Z',
@@ -180,7 +207,7 @@ describe('scrapeReservationListHandler', () => {
 
   it('returns 409 auth_epoch_not_ready when /inject-cookies has not completed', async () => {
     vi.mocked(browserModule.getBrowserContext).mockResolvedValue({} as never);
-    vi.mocked(browserModule.hasAirbnbSession).mockResolvedValue(true);
+    vi.mocked(browserModule.readAirbnbSessionStrict).mockResolvedValue(true);
     _resetAuthEpochForTesting();
     beginCookieInject(); // cookies in flight; ready=false
     const { req, res, statusSpy, jsonSpy } = buildReqRes({ host_id: HOST_ID });
@@ -192,7 +219,7 @@ describe('scrapeReservationListHandler', () => {
 
   it('returns 409 auth_epoch_changed when cookies rotate mid-scrape', async () => {
     vi.mocked(browserModule.getBrowserContext).mockResolvedValue({} as never);
-    vi.mocked(browserModule.hasAirbnbSession).mockResolvedValue(true);
+    vi.mocked(browserModule.readAirbnbSessionStrict).mockResolvedValue(true);
     vi.mocked(scraperModule.scrapeReservationList).mockImplementation(async () => {
       // Simulate cookie rotation while scrape is in flight.
       beginCookieInject();
@@ -206,7 +233,7 @@ describe('scrapeReservationListHandler', () => {
 
   it('returns 401 invalid_cookies when no Airbnb session present', async () => {
     vi.mocked(browserModule.getBrowserContext).mockResolvedValue({} as never);
-    vi.mocked(browserModule.hasAirbnbSession).mockResolvedValue(false);
+    vi.mocked(browserModule.readAirbnbSessionStrict).mockResolvedValue(false);
     const { req, res, statusSpy, jsonSpy } = buildReqRes({ host_id: HOST_ID, mode: 'incremental' });
     await scrapeReservationListHandler(env)(req, res);
     expect(statusSpy).toHaveBeenCalledWith(401);
@@ -216,7 +243,7 @@ describe('scrapeReservationListHandler', () => {
 
   it('returns 409 auth_epoch_changed when scraper throws AND epoch rotated mid-scrape', async () => {
     vi.mocked(browserModule.getBrowserContext).mockResolvedValue({} as never);
-    vi.mocked(browserModule.hasAirbnbSession).mockResolvedValue(true);
+    vi.mocked(browserModule.readAirbnbSessionStrict).mockResolvedValue(true);
     vi.mocked(scraperModule.scrapeReservationList).mockImplementation(async () => {
       // Simulate Playwright `Target closed` while a concurrent /inject-cookies bumps the epoch.
       beginCookieInject();
@@ -230,7 +257,7 @@ describe('scrapeReservationListHandler', () => {
 
   it('returns 409 auth_epoch_changed when hasAirbnbSession throws AND epoch rotated', async () => {
     vi.mocked(browserModule.getBrowserContext).mockResolvedValue({} as never);
-    vi.mocked(browserModule.hasAirbnbSession).mockImplementation(async () => {
+    vi.mocked(browserModule.readAirbnbSessionStrict).mockImplementation(async () => {
       beginCookieInject();
       throw new Error('cookie store closed');
     });
@@ -242,7 +269,7 @@ describe('scrapeReservationListHandler', () => {
 
   it('returns 409 auth_epoch_changed when hasAirbnbSession returns false because of mid-rotation', async () => {
     vi.mocked(browserModule.getBrowserContext).mockResolvedValue({} as never);
-    vi.mocked(browserModule.hasAirbnbSession).mockImplementation(async () => {
+    vi.mocked(browserModule.readAirbnbSessionStrict).mockImplementation(async () => {
       beginCookieInject();
       return false;
     });
@@ -254,7 +281,7 @@ describe('scrapeReservationListHandler', () => {
 
   it('returns 500 with scrape_failed when scraper throws', async () => {
     vi.mocked(browserModule.getBrowserContext).mockResolvedValue({} as never);
-    vi.mocked(browserModule.hasAirbnbSession).mockResolvedValue(true);
+    vi.mocked(browserModule.readAirbnbSessionStrict).mockResolvedValue(true);
     vi.mocked(scraperModule.scrapeReservationList).mockRejectedValue(new Error('dom not found'));
     const { req, res, statusSpy, jsonSpy } = buildReqRes({ host_id: HOST_ID, mode: 'incremental' });
     await scrapeReservationListHandler(env)(req, res);
@@ -266,7 +293,7 @@ describe('scrapeReservationListHandler', () => {
 
   it('returns 200 with body matching Issue #45 contract on real-scraper happy path (no X-Stub header)', async () => {
     vi.mocked(browserModule.getBrowserContext).mockResolvedValue({} as never);
-    vi.mocked(browserModule.hasAirbnbSession).mockResolvedValue(true);
+    vi.mocked(browserModule.readAirbnbSessionStrict).mockResolvedValue(true);
     vi.mocked(scraperModule.scrapeReservationList).mockResolvedValue({
       reservations: [
         {
@@ -307,7 +334,7 @@ describe('scrapeReservationListHandler', () => {
 
   it('sets X-Stub: true header when stub scraper sets the flag (body still matches contract)', async () => {
     vi.mocked(browserModule.getBrowserContext).mockResolvedValue({} as never);
-    vi.mocked(browserModule.hasAirbnbSession).mockResolvedValue(true);
+    vi.mocked(browserModule.readAirbnbSessionStrict).mockResolvedValue(true);
     vi.mocked(scraperModule.scrapeReservationList).mockResolvedValue({
       reservations: [],
       scrapedAt: '2026-04-28T00:00:00.000Z',
@@ -327,7 +354,7 @@ describe('scrapeReservationListHandler', () => {
 
   it('returns 500 with session_check_failed when hasAirbnbSession throws', async () => {
     vi.mocked(browserModule.getBrowserContext).mockResolvedValue({} as never);
-    vi.mocked(browserModule.hasAirbnbSession).mockRejectedValue(new Error('cookie store dead'));
+    vi.mocked(browserModule.readAirbnbSessionStrict).mockRejectedValue(new Error('cookie store dead'));
     const { req, res, statusSpy, jsonSpy } = buildReqRes({ host_id: HOST_ID });
     await scrapeReservationListHandler(env)(req, res);
     expect(statusSpy).toHaveBeenCalledWith(500);
@@ -338,7 +365,7 @@ describe('scrapeReservationListHandler', () => {
 
   it('defaults mode to incremental when omitted', async () => {
     vi.mocked(browserModule.getBrowserContext).mockResolvedValue({} as never);
-    vi.mocked(browserModule.hasAirbnbSession).mockResolvedValue(true);
+    vi.mocked(browserModule.readAirbnbSessionStrict).mockResolvedValue(true);
     vi.mocked(scraperModule.scrapeReservationList).mockResolvedValue({
       reservations: [],
       scrapedAt: '2026-04-28T00:00:00.000Z',

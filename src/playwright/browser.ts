@@ -94,15 +94,31 @@ export function getLastAirbnbRequestAt(): Date | null {
  *
  * Airbnb's session cookies are `_airbed_session_id` and `_aat`. Both must be present.
  * We DO NOT hit airbnb.com on /health — that would generate traffic on every 30s health check.
+ *
+ * Lenient: swallows `ctx.cookies()` errors and returns `false`. Used by /health
+ * where a closed/corrupt context is treated as "no session" without surfacing
+ * the underlying error. Endpoints that need to distinguish "no session" from
+ * "context error" should use `readAirbnbSessionStrict` instead.
  */
 export async function hasAirbnbSession(ctx: BrowserContext): Promise<boolean> {
   try {
-    const cookies = await ctx.cookies('https://www.airbnb.com');
-    const names = new Set(cookies.map((c) => c.name));
-    return names.has('_airbed_session_id') && names.has('_aat');
+    return await readAirbnbSessionStrict(ctx);
   } catch {
     return false;
   }
+}
+
+/**
+ * Strict variant: throws on `ctx.cookies()` failures (closed context, etc.)
+ * instead of swallowing them. Used by /scrape-reservation-list so a transient
+ * browser error becomes 500 `session_check_failed` (or 409 `auth_epoch_changed`
+ * if a rotation overlapped) rather than being misclassified as 401
+ * `invalid_cookies`.
+ */
+export async function readAirbnbSessionStrict(ctx: BrowserContext): Promise<boolean> {
+  const cookies = await ctx.cookies('https://www.airbnb.com');
+  const names = new Set(cookies.map((c) => c.name));
+  return names.has('_airbed_session_id') && names.has('_aat');
 }
 
 /** Open a fresh page reusing the context. Callers MUST await page.close() when done. */

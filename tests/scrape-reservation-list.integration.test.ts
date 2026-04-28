@@ -18,6 +18,13 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 vi.mock('../src/playwright/browser', () => ({
   getBrowserContext: vi.fn().mockResolvedValue({}),
   hasAirbnbSession: vi.fn().mockResolvedValue(false),
+  readAirbnbSessionStrict: vi.fn().mockResolvedValue(false),
+  closeBrowserContext: vi.fn().mockResolvedValue(undefined),
+  markAirbnbRequest: vi.fn(),
+  getLastAirbnbRequestAt: vi.fn().mockReturnValue(null),
+  openPage: vi.fn(),
+  getSpaListener: vi.fn(),
+  ensureSpaListenerOnPage: vi.fn(),
 }));
 vi.mock('../src/playwright/scrape-reservations', () => ({
   scrapeReservationList: vi.fn(),
@@ -85,6 +92,8 @@ function signedHeaders(opts: {
   hostId?: string;
   timestamp?: number;
   nonce?: string;
+  /** Override body-hash header (for tampering tests). */
+  bodyHashOverride?: string;
 }): Record<string, string> {
   const timestamp = opts.timestamp ?? Math.floor(Date.now() / 1000);
   const nonce = opts.nonce ?? 'a1b2c3d4-5678-4abc-9def-0123456789ab';
@@ -104,6 +113,7 @@ function signedHeaders(opts: {
     'x-timestamp': String(timestamp),
     'x-nonce': nonce,
     'x-host-id': hostId,
+    'x-body-hash': opts.bodyHashOverride ?? bodyHash,
   };
 }
 
@@ -127,6 +137,22 @@ describe('/scrape-reservation-list HMAC integration', () => {
       body,
     });
     headers['x-signature'] = 'f'.repeat(64);
+    const r = await fetch(`${baseUrl}/scrape-reservation-list`, {
+      method: 'POST',
+      headers,
+      body,
+    });
+    expect(r.status).toBe(401);
+  });
+
+  it('rejects POST with mismatched X-Body-Hash header with 401', async () => {
+    const body = Buffer.from(JSON.stringify({ host_id: HOST_ID }), 'utf8');
+    const headers = signedHeaders({
+      method: 'POST',
+      path: '/scrape-reservation-list',
+      body,
+      bodyHashOverride: '0'.repeat(64),
+    });
     const r = await fetch(`${baseUrl}/scrape-reservation-list`, {
       method: 'POST',
       headers,

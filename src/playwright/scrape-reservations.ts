@@ -28,11 +28,12 @@ export interface ScrapeReservationsResult {
   scrapedAt: string;
   accountEmail: string;
   /**
-   * Set to `true` while the real DOM scraper is unimplemented. The handler
-   * surfaces this to callers as a top-level `_stub: true` field on the
-   * response body so the staysync worker has a machine-readable signal not
-   * to overwrite real host records (e.g. blank `account_email`) with stub
-   * defaults. Remove this field once the real scraper lands.
+   * Set to `true` while the real DOM scraper is unimplemented. The endpoint
+   * forwards this as the `X-Stub: true` HTTP response header (NOT a body
+   * field — the body matches Issue #45 exactly so strict consumer parsers
+   * cannot reject it). The staysync worker MUST inspect that header and
+   * skip persistence of empty fields (e.g. `account_email`) when set.
+   * Remove this field once the real scraper lands.
    */
   stub?: true;
 }

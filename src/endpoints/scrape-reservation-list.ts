@@ -25,7 +25,7 @@
 
 import type { Request, Response } from 'express';
 import type { MachineEnv } from '../lib/env';
-import { getBrowserContext, hasAirbnbSession } from '../playwright/browser';
+import { getBrowserContext, readAirbnbSessionStrict } from '../playwright/browser';
 import { currentAuthEpoch, isAuthEpochReady } from '../playwright/auth-epoch';
 import { scrapeReservationList } from '../playwright/scrape-reservations';
 
@@ -46,24 +46,47 @@ interface ScrapeReservationListBody {
 }
 
 /**
- * Permissive ISO8601 / RFC3339 timestamp check.
+ * Permissive ISO8601 / RFC3339 date-time timestamp check.
  *
  * Accepts the canonical Z-suffixed form emitted by JS `Date#toISOString()`
  * (e.g. `2026-04-01T00:00:00.000Z`) PLUS the equally valid forms callers
  * outside JS routinely produce: no fractional seconds (`2026-04-01T00:00:00Z`),
  * numeric offsets (`2026-04-01T00:00:00+00:00`), and 1-6 digit fractional
- * seconds. Rejects ambiguous/locale-dependent inputs like `'2026-04-28 10:30:00'`
- * (space separator) or `'04/28/2026'` that `Date.parse` would otherwise accept.
+ * seconds.
  *
- * Strict round-trip equality (`new Date(s).toISOString() === s`) was tried in
- * the prior cycle but rejected `2026-04-01T00:00:00Z` and offset forms — too
- * strict for a contract that says "ISO8601" without pinning a sub-format.
+ * Rejects:
+ *   - ambiguous/locale-dependent inputs (`2026-04-28 10:30:00`, `04/28/2026`)
+ *   - date-only forms (`2026-04-01`) — contract is date-time, not date
+ *   - invalid calendar dates (`2026-02-31T00:00:00Z`) that `Date.parse` would
+ *     silently auto-correct to a different day, which would shift incremental
+ *     scrape windows
+ *
+ * The calendar-validity check round-trips Y/M/D against the parsed Date, which
+ * works cleanly for Z-suffixed inputs. For numeric-offset inputs, the UTC date
+ * after offset normalization may legitimately differ from the input prefix by
+ * up to one day, so the calendar check is skipped for those forms (offset
+ * inputs are still rejected at the regex level if malformed).
  */
 const ISO8601_REGEX =
-  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/;
+  /^(\d{4})-(\d{2})-(\d{2})T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(Z|[+-]\d{2}:\d{2})$/;
 
 function isIso8601(s: string): boolean {
-  return ISO8601_REGEX.test(s) && Number.isFinite(Date.parse(s));
+  const m = ISO8601_REGEX.exec(s);
+  if (!m) return false;
+  const t = Date.parse(s);
+  if (!Number.isFinite(t)) return false;
+  // Calendar-validity check: only meaningful for Z-suffixed inputs (and the
+  // equivalent +00:00 / -00:00 zero-offsets) where the input Y/M/D matches
+  // the UTC representation. For non-zero offsets, Date.parse normalizes to
+  // UTC and the YMD prefix may legitimately differ.
+  const offset = m[4];
+  const isUtc = offset === 'Z' || offset === '+00:00' || offset === '-00:00';
+  if (!isUtc) return true;
+  const d = new Date(t);
+  const utcYear = String(d.getUTCFullYear()).padStart(4, '0');
+  const utcMonth = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const utcDay = String(d.getUTCDate()).padStart(2, '0');
+  return utcYear === m[1] && utcMonth === m[2] && utcDay === m[3];
 }
 
 function isValidBody(body: unknown): body is ScrapeReservationListBody {
@@ -115,7 +138,7 @@ export function scrapeReservationListHandler(env: MachineEnv) {
 
     let sessionOk: boolean;
     try {
-      sessionOk = await hasAirbnbSession(ctx);
+      sessionOk = await readAirbnbSessionStrict(ctx);
     } catch (err) {
       // A concurrent rotation may have closed the cookie store mid-call; surface
       // the rotation as 409 instead of masking it as 500 session_check_failed.
