@@ -27,6 +27,14 @@ export interface ScrapeReservationsResult {
   reservations: Reservation[];
   scrapedAt: string;
   accountEmail: string;
+  /**
+   * Set to `true` while the real DOM scraper is unimplemented. The handler
+   * surfaces this to callers as a top-level `_stub: true` field on the
+   * response body so the staysync worker has a machine-readable signal not
+   * to overwrite real host records (e.g. blank `account_email`) with stub
+   * defaults. Remove this field once the real scraper lands.
+   */
+  stub?: true;
 }
 
 export async function scrapeReservationList(
@@ -35,11 +43,10 @@ export async function scrapeReservationList(
 ): Promise<ScrapeReservationsResult> {
   // STUB: real scraper will populate `reservations` from /hosting/reservations
   // and read `accountEmail` from the host's profile meta on /hosting/today.
-  // Until then, accountEmail returns '' — the staysync worker MUST treat empty
-  // as "stub mode, do not blank existing host record" rather than as authoritative.
   return {
     reservations: [],
     scrapedAt: new Date().toISOString(),
     accountEmail: '',
+    stub: true,
   };
 }

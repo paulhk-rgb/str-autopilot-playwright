@@ -87,7 +87,16 @@ export function scrapeReservationListHandler(env: MachineEnv) {
       });
     }
 
-    if (!(await hasAirbnbSession(ctx))) {
+    let sessionOk: boolean;
+    try {
+      sessionOk = await hasAirbnbSession(ctx);
+    } catch (err) {
+      return res.status(500).json({
+        error: 'session_check_failed',
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+    if (!sessionOk) {
       return res.status(401).json({ error: 'invalid_cookies' });
     }
 
@@ -97,11 +106,18 @@ export function scrapeReservationListHandler(env: MachineEnv) {
         since: req.body.since,
       });
 
-      return res.status(200).json({
+      const body: {
+        reservations: Reservation[];
+        scraped_at: string;
+        account_email: string;
+        _stub?: true;
+      } = {
         reservations: result.reservations,
         scraped_at: result.scrapedAt,
         account_email: result.accountEmail,
-      });
+      };
+      if (result.stub) body._stub = true;
+      return res.status(200).json(body);
     } catch (err) {
       return res.status(500).json({
         error: 'scrape_failed',

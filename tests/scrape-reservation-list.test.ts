@@ -143,7 +143,7 @@ describe('scrapeReservationListHandler', () => {
     );
   });
 
-  it('returns 200 with reservations + scraped_at + account_email on happy path', async () => {
+  it('returns 200 with reservations + scraped_at + account_email on happy path (real scraper, no _stub)', async () => {
     vi.mocked(browserModule.getBrowserContext).mockResolvedValue({} as never);
     vi.mocked(browserModule.hasAirbnbSession).mockResolvedValue(true);
     vi.mocked(scraperModule.scrapeReservationList).mockResolvedValue({
@@ -181,6 +181,39 @@ describe('scrapeReservationListHandler', () => {
       scraped_at: '2026-04-28T00:00:00.000Z',
       account_email: 'host@example.com',
     });
+    const sentBody = jsonSpy.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(sentBody._stub).toBeUndefined();
+  });
+
+  it('surfaces _stub: true when stub scraper sets the flag', async () => {
+    vi.mocked(browserModule.getBrowserContext).mockResolvedValue({} as never);
+    vi.mocked(browserModule.hasAirbnbSession).mockResolvedValue(true);
+    vi.mocked(scraperModule.scrapeReservationList).mockResolvedValue({
+      reservations: [],
+      scrapedAt: '2026-04-28T00:00:00.000Z',
+      accountEmail: '',
+      stub: true,
+    });
+    const { req, res, statusSpy, jsonSpy } = buildReqRes({ host_id: HOST_ID });
+    await scrapeReservationListHandler(env)(req, res);
+    expect(statusSpy).toHaveBeenCalledWith(200);
+    expect(jsonSpy).toHaveBeenCalledWith({
+      reservations: [],
+      scraped_at: '2026-04-28T00:00:00.000Z',
+      account_email: '',
+      _stub: true,
+    });
+  });
+
+  it('returns 500 with session_check_failed when hasAirbnbSession throws', async () => {
+    vi.mocked(browserModule.getBrowserContext).mockResolvedValue({} as never);
+    vi.mocked(browserModule.hasAirbnbSession).mockRejectedValue(new Error('cookie store dead'));
+    const { req, res, statusSpy, jsonSpy } = buildReqRes({ host_id: HOST_ID });
+    await scrapeReservationListHandler(env)(req, res);
+    expect(statusSpy).toHaveBeenCalledWith(500);
+    expect(jsonSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ error: 'session_check_failed', message: 'cookie store dead' }),
+    );
   });
 
   it('defaults mode to incremental when omitted', async () => {
@@ -200,13 +233,14 @@ describe('scrapeReservationListHandler', () => {
     );
   });
 
-  it('stub scraper returns empty reservations + populated scraped_at', async () => {
+  it('stub scraper returns empty reservations + populated scraped_at + stub flag', async () => {
     const { scrapeReservationList } = await vi.importActual<typeof scraperModule>(
       '../src/playwright/scrape-reservations',
     );
     const result = await scrapeReservationList({} as never, { mode: 'incremental' });
     expect(result.reservations).toEqual([]);
     expect(result.accountEmail).toBe('');
+    expect(result.stub).toBe(true);
     expect(() => new Date(result.scrapedAt).toISOString()).not.toThrow();
     expect(new Date(result.scrapedAt).toISOString()).toBe(result.scrapedAt);
   });
