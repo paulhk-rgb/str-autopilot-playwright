@@ -57,36 +57,39 @@ interface ScrapeReservationListBody {
  * Rejects:
  *   - ambiguous/locale-dependent inputs (`2026-04-28 10:30:00`, `04/28/2026`)
  *   - date-only forms (`2026-04-01`) — contract is date-time, not date
- *   - invalid calendar dates (`2026-02-31T00:00:00Z`) that `Date.parse` would
- *     silently auto-correct to a different day, which would shift incremental
- *     scrape windows
+ *   - invalid calendar dates (`2026-02-31T00:00:00Z`,
+ *     `2026-02-31T00:00:00-05:00`) — `Date.parse` silently auto-corrects
+ *     day-overflows that stay within ISO 31-max (e.g. Feb 31 → Mar 3)
+ *     regardless of offset, so we validate Y/M/D at the component level
+ *     before relying on `Date.parse`. This works uniformly across all
+ *     offset variants because it inspects the wall-clock components from
+ *     the input, not the UTC-normalized result.
  *
- * The calendar-validity check round-trips Y/M/D against the parsed Date, which
- * works cleanly for Z-suffixed inputs. For numeric-offset inputs, the UTC date
- * after offset normalization may legitimately differ from the input prefix by
- * up to one day, so the calendar check is skipped for those forms (offset
- * inputs are still rejected at the regex level if malformed).
+ * `Date.parse` already rejects month > 12 and day > 31 at the lexical level
+ * (returns NaN), so the component check focuses on day-vs-days-in-month.
  */
 const ISO8601_REGEX =
-  /^(\d{4})-(\d{2})-(\d{2})T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(Z|[+-]\d{2}:\d{2})$/;
+  /^(\d{4})-(\d{2})-(\d{2})T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/;
+
+function daysInMonth(year: number, month: number): number {
+  // `Date.UTC(year, month, 0)` rolls back to the last day of the prior month.
+  // Pass `month` as the 1-indexed input value (the API treats it as 0-indexed
+  // + advance by `0`, which equals the last day of `month - 1` in 0-index =
+  // `month` in 1-index). Result already honours leap years.
+  return new Date(Date.UTC(year, month, 0)).getUTCDate();
+}
 
 function isIso8601(s: string): boolean {
   const m = ISO8601_REGEX.exec(s);
   if (!m) return false;
   const t = Date.parse(s);
   if (!Number.isFinite(t)) return false;
-  // Calendar-validity check: only meaningful for Z-suffixed inputs (and the
-  // equivalent +00:00 / -00:00 zero-offsets) where the input Y/M/D matches
-  // the UTC representation. For non-zero offsets, Date.parse normalizes to
-  // UTC and the YMD prefix may legitimately differ.
-  const offset = m[4];
-  const isUtc = offset === 'Z' || offset === '+00:00' || offset === '-00:00';
-  if (!isUtc) return true;
-  const d = new Date(t);
-  const utcYear = String(d.getUTCFullYear()).padStart(4, '0');
-  const utcMonth = String(d.getUTCMonth() + 1).padStart(2, '0');
-  const utcDay = String(d.getUTCDate()).padStart(2, '0');
-  return utcYear === m[1] && utcMonth === m[2] && utcDay === m[3];
+  const year = Number(m[1]);
+  const month = Number(m[2]);
+  const day = Number(m[3]);
+  if (month < 1 || month > 12) return false;
+  if (day < 1 || day > daysInMonth(year, month)) return false;
+  return true;
 }
 
 function isValidBody(body: unknown): body is ScrapeReservationListBody {

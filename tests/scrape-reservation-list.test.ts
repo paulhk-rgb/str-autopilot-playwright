@@ -151,6 +151,34 @@ describe('scrapeReservationListHandler', () => {
   });
 
   it.each([
+    ['feb-31-positive-offset', '2026-02-31T00:00:00+05:00'],
+    ['feb-31-negative-offset', '2026-02-31T00:00:00-05:00'],
+    ['apr-31-Z', '2026-04-31T00:00:00Z'],
+    ['nov-31-positive-offset', '2026-11-31T00:00:00+09:00'],
+    ['feb-29-non-leap-Z', '2026-02-29T00:00:00Z'],
+  ])('returns 400 for invalid calendar date with any offset (%s: %s)', async (_name, since) => {
+    const { req, res, statusSpy } = buildReqRes({ host_id: HOST_ID, since });
+    await scrapeReservationListHandler(env)(req, res);
+    expect(statusSpy).toHaveBeenCalledWith(400);
+  });
+
+  it('accepts Feb 29 in a leap year', async () => {
+    vi.mocked(browserModule.getBrowserContext).mockResolvedValue({} as never);
+    vi.mocked(browserModule.readAirbnbSessionStrict).mockResolvedValue(true);
+    vi.mocked(scraperModule.scrapeReservationList).mockResolvedValue({
+      reservations: [],
+      scrapedAt: '2026-04-28T00:00:00.000Z',
+      accountEmail: '',
+    });
+    const { req, res, statusSpy } = buildReqRes({
+      host_id: HOST_ID,
+      since: '2024-02-29T00:00:00Z',
+    });
+    await scrapeReservationListHandler(env)(req, res);
+    expect(statusSpy).toHaveBeenCalledWith(200);
+  });
+
+  it.each([
     ['canonical-Z-millis', '2026-04-01T00:00:00.000Z'],
     ['Z-no-millis', '2026-04-01T00:00:00Z'],
     ['plus-offset-no-millis', '2026-04-01T00:00:00+00:00'],
@@ -255,7 +283,7 @@ describe('scrapeReservationListHandler', () => {
     expect(jsonSpy).toHaveBeenCalledWith({ error: 'auth_epoch_changed' });
   });
 
-  it('returns 409 auth_epoch_changed when hasAirbnbSession throws AND epoch rotated', async () => {
+  it('returns 409 auth_epoch_changed when readAirbnbSessionStrict throws AND epoch rotated', async () => {
     vi.mocked(browserModule.getBrowserContext).mockResolvedValue({} as never);
     vi.mocked(browserModule.readAirbnbSessionStrict).mockImplementation(async () => {
       beginCookieInject();
@@ -267,7 +295,7 @@ describe('scrapeReservationListHandler', () => {
     expect(jsonSpy).toHaveBeenCalledWith({ error: 'auth_epoch_changed' });
   });
 
-  it('returns 409 auth_epoch_changed when hasAirbnbSession returns false because of mid-rotation', async () => {
+  it('returns 409 auth_epoch_changed when readAirbnbSessionStrict returns false because of mid-rotation', async () => {
     vi.mocked(browserModule.getBrowserContext).mockResolvedValue({} as never);
     vi.mocked(browserModule.readAirbnbSessionStrict).mockImplementation(async () => {
       beginCookieInject();
@@ -352,7 +380,7 @@ describe('scrapeReservationListHandler', () => {
     });
   });
 
-  it('returns 500 with session_check_failed when hasAirbnbSession throws', async () => {
+  it('returns 500 with session_check_failed when readAirbnbSessionStrict throws', async () => {
     vi.mocked(browserModule.getBrowserContext).mockResolvedValue({} as never);
     vi.mocked(browserModule.readAirbnbSessionStrict).mockRejectedValue(new Error('cookie store dead'));
     const { req, res, statusSpy, jsonSpy } = buildReqRes({ host_id: HOST_ID });
