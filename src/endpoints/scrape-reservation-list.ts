@@ -149,6 +149,14 @@ export function scrapeReservationListHandler(env: MachineEnv) {
       });
     }
 
+    // Re-check epoch after getBrowserContext: a concurrent /inject-cookies could
+    // have started rotating between the initial gate and now, in which case any
+    // cookies we observe past this point may be a half-rotated mix. Surface as
+    // a retryable 409 rather than letting the call proceed into a partial scrape.
+    if (currentAuthEpoch() !== epochAtStart) {
+      return res.status(409).json({ error: 'auth_epoch_changed' });
+    }
+
     let sessionOk: boolean;
     try {
       sessionOk = await readAirbnbSessionStrict(ctx);
@@ -171,6 +179,14 @@ export function scrapeReservationListHandler(env: MachineEnv) {
         return res.status(409).json({ error: 'auth_epoch_changed' });
       }
       return res.status(401).json({ error: 'invalid_cookies' });
+    }
+
+    // Re-check epoch after a TRUE session result: the cookies we just observed
+    // could have been the in-flight mid-rotation set. If the epoch shifted, the
+    // session validity we just confirmed is potentially stale — fail closed
+    // with 409 rather than starting a scrape against a half-rotated context.
+    if (currentAuthEpoch() !== epochAtStart) {
+      return res.status(409).json({ error: 'auth_epoch_changed' });
     }
 
     try {

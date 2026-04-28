@@ -286,6 +286,36 @@ describe('scrapeReservationListHandler', () => {
     expect(scraperModule.scrapeReservationList).not.toHaveBeenCalled();
   });
 
+  it('returns 409 auth_epoch_changed when epoch rotates between getBrowserContext and session check', async () => {
+    vi.mocked(browserModule.getBrowserContext).mockImplementation(async () => {
+      // Simulate /inject-cookies bumping the epoch while context spin-up is awaiting.
+      beginCookieInject();
+      return {} as never;
+    });
+    vi.mocked(browserModule.readAirbnbSessionStrict).mockResolvedValue(true);
+    const { req, res, statusSpy, jsonSpy } = buildReqRes({ host_id: HOST_ID });
+    await scrapeReservationListHandler(env)(req, res);
+    expect(statusSpy).toHaveBeenCalledWith(409);
+    expect(jsonSpy).toHaveBeenCalledWith({ error: 'auth_epoch_changed' });
+    expect(browserModule.readAirbnbSessionStrict).not.toHaveBeenCalled();
+    expect(scraperModule.scrapeReservationList).not.toHaveBeenCalled();
+  });
+
+  it('returns 409 auth_epoch_changed when epoch rotates between session=true and scrape call', async () => {
+    vi.mocked(browserModule.getBrowserContext).mockResolvedValue({} as never);
+    vi.mocked(browserModule.readAirbnbSessionStrict).mockImplementation(async () => {
+      // Simulate /inject-cookies bumping epoch mid-cookie-read; the read still
+      // returns true (cookies happen to look valid in the partial state).
+      beginCookieInject();
+      return true;
+    });
+    const { req, res, statusSpy, jsonSpy } = buildReqRes({ host_id: HOST_ID });
+    await scrapeReservationListHandler(env)(req, res);
+    expect(statusSpy).toHaveBeenCalledWith(409);
+    expect(jsonSpy).toHaveBeenCalledWith({ error: 'auth_epoch_changed' });
+    expect(scraperModule.scrapeReservationList).not.toHaveBeenCalled();
+  });
+
   it('returns 409 auth_epoch_changed when scraper throws AND epoch rotated mid-scrape', async () => {
     vi.mocked(browserModule.getBrowserContext).mockResolvedValue({} as never);
     vi.mocked(browserModule.readAirbnbSessionStrict).mockResolvedValue(true);
