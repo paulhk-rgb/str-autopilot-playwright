@@ -46,18 +46,24 @@ interface ScrapeReservationListBody {
 }
 
 /**
- * Strict ISO8601 check: parsable AND `Date#toISOString()` round-trips to the
- * same string. Rejects ambiguous/locale-dependent forms like `'2026-04-28 10:30'`
- * or `'04/28/2026'` that `Date.parse` would otherwise accept.
+ * Permissive ISO8601 / RFC3339 timestamp check.
+ *
+ * Accepts the canonical Z-suffixed form emitted by JS `Date#toISOString()`
+ * (e.g. `2026-04-01T00:00:00.000Z`) PLUS the equally valid forms callers
+ * outside JS routinely produce: no fractional seconds (`2026-04-01T00:00:00Z`),
+ * numeric offsets (`2026-04-01T00:00:00+00:00`), and 1-6 digit fractional
+ * seconds. Rejects ambiguous/locale-dependent inputs like `'2026-04-28 10:30:00'`
+ * (space separator) or `'04/28/2026'` that `Date.parse` would otherwise accept.
+ *
+ * Strict round-trip equality (`new Date(s).toISOString() === s`) was tried in
+ * the prior cycle but rejected `2026-04-01T00:00:00Z` and offset forms — too
+ * strict for a contract that says "ISO8601" without pinning a sub-format.
  */
-function isStrictIso8601(s: string): boolean {
-  const t = Date.parse(s);
-  if (!Number.isFinite(t)) return false;
-  try {
-    return new Date(t).toISOString() === s;
-  } catch {
-    return false;
-  }
+const ISO8601_REGEX =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/;
+
+function isIso8601(s: string): boolean {
+  return ISO8601_REGEX.test(s) && Number.isFinite(Date.parse(s));
 }
 
 function isValidBody(body: unknown): body is ScrapeReservationListBody {
@@ -74,7 +80,7 @@ function isValidBody(body: unknown): body is ScrapeReservationListBody {
   }
   if (b.since !== undefined) {
     if (typeof b.since !== 'string') return false;
-    if (!isStrictIso8601(b.since)) return false;
+    if (!isIso8601(b.since)) return false;
   }
   return true;
 }
@@ -88,6 +94,14 @@ export function scrapeReservationListHandler(env: MachineEnv) {
     if (req.body.host_id !== env.HOST_ID) {
       return res.status(403).json({ error: 'host_id_mismatch' });
     }
+
+    // Auth-epoch readiness MUST be checked before any browser/cookie read so
+    // a concurrent /inject-cookies (which sets ready=false BEFORE rewriting
+    // cookies) is detected before we can observe a half-rotated state.
+    if (!isAuthEpochReady()) {
+      return res.status(409).json({ error: 'auth_epoch_not_ready' });
+    }
+    const epochAtStart = currentAuthEpoch();
 
     let ctx;
     try {
@@ -103,19 +117,25 @@ export function scrapeReservationListHandler(env: MachineEnv) {
     try {
       sessionOk = await hasAirbnbSession(ctx);
     } catch (err) {
+      // A concurrent rotation may have closed the cookie store mid-call; surface
+      // the rotation as 409 instead of masking it as 500 session_check_failed.
+      if (currentAuthEpoch() !== epochAtStart) {
+        return res.status(409).json({ error: 'auth_epoch_changed' });
+      }
       return res.status(500).json({
         error: 'session_check_failed',
         message: err instanceof Error ? err.message : String(err),
       });
     }
     if (!sessionOk) {
+      // Re-verify epoch before returning invalid_cookies — a concurrent rotation
+      // may have produced the false return; that's a retryable rotation, not a
+      // permanently invalid session.
+      if (currentAuthEpoch() !== epochAtStart) {
+        return res.status(409).json({ error: 'auth_epoch_changed' });
+      }
       return res.status(401).json({ error: 'invalid_cookies' });
     }
-
-    if (!isAuthEpochReady()) {
-      return res.status(409).json({ error: 'auth_epoch_not_ready' });
-    }
-    const epochAtStart = currentAuthEpoch();
 
     try {
       const result = await scrapeReservationList(ctx, {
@@ -127,27 +147,25 @@ export function scrapeReservationListHandler(env: MachineEnv) {
         return res.status(409).json({ error: 'auth_epoch_changed' });
       }
 
-      // Response shape per the staysync historical-sync host worker contract:
-      //   { reservations, scraped_at, account_email, _stub?: true }
-      // The `_stub` flag is a machine-readable signal that the real DOM scraper
-      // is not yet wired (handler forwards it from the scraper layer). Worker
-      // MUST inspect `_stub` and skip persistence of `account_email` (and any
-      // empty fields) when present. Field is removed once the real scraper
-      // lands; consumer parsers must accept its presence today and its absence
-      // tomorrow.
-      const body: {
-        reservations: Reservation[];
-        scraped_at: string;
-        account_email: string;
-        _stub?: true;
-      } = {
+      // Stub mode is signalled via the `X-Stub: true` response header — the
+      // 200 body matches Issue #45 exactly (`{ reservations, scraped_at,
+      // account_email }`) so strict consumer parsers cannot reject it. The
+      // staysync worker MUST inspect this header and skip persistence of empty
+      // fields (e.g. `account_email`) when set. Header disappears once the
+      // real scraper lands.
+      if (result.stub) res.setHeader('X-Stub', 'true');
+      return res.status(200).json({
         reservations: result.reservations,
         scraped_at: result.scrapedAt,
         account_email: result.accountEmail,
-      };
-      if (result.stub) body._stub = true;
-      return res.status(200).json(body);
+      });
     } catch (err) {
+      // Mid-scrape rotation typically closes the browser context, surfacing as
+      // a Playwright `Target closed` throw. Re-check the epoch so the worker
+      // sees 409 (retryable) rather than 500 (treated as hard failure).
+      if (currentAuthEpoch() !== epochAtStart) {
+        return res.status(409).json({ error: 'auth_epoch_changed' });
+      }
       return res.status(500).json({
         error: 'scrape_failed',
         message: err instanceof Error ? err.message : String(err),

@@ -46,12 +46,23 @@ const env: MachineEnv = {
   WATERMARKS_PATH: '/tmp/wm.json',
 };
 
-function buildReqRes(body: unknown): { req: Request; res: Response; jsonSpy: ReturnType<typeof vi.fn>; statusSpy: ReturnType<typeof vi.fn> } {
+function buildReqRes(body: unknown): {
+  req: Request;
+  res: Response;
+  jsonSpy: ReturnType<typeof vi.fn>;
+  statusSpy: ReturnType<typeof vi.fn>;
+  setHeaderSpy: ReturnType<typeof vi.fn>;
+} {
   const jsonSpy = vi.fn();
   const statusSpy = vi.fn().mockImplementation(() => ({ json: jsonSpy }));
-  const res = { status: statusSpy, json: jsonSpy } as unknown as Response;
+  const setHeaderSpy = vi.fn();
+  const res = {
+    status: statusSpy,
+    json: jsonSpy,
+    setHeader: setHeaderSpy,
+  } as unknown as Response;
   const req = { body } as Request;
-  return { req, res, jsonSpy, statusSpy };
+  return { req, res, jsonSpy, statusSpy, setHeaderSpy };
 }
 
 beforeEach(() => {
@@ -94,7 +105,7 @@ describe('scrapeReservationListHandler', () => {
     expect(jsonSpy).toHaveBeenCalledWith({ error: 'malformed_body' });
   });
 
-  it('returns 400 when since is parsable but not strict ISO8601 (space-separated)', async () => {
+  it('returns 400 when since uses space separator instead of T', async () => {
     const { req, res, statusSpy } = buildReqRes({
       host_id: HOST_ID,
       since: '2026-04-28 10:30:00',
@@ -103,13 +114,32 @@ describe('scrapeReservationListHandler', () => {
     expect(statusSpy).toHaveBeenCalledWith(400);
   });
 
-  it('returns 400 when since is locale-format date (rejected by strict ISO8601)', async () => {
+  it('returns 400 when since is locale-format date', async () => {
     const { req, res, statusSpy } = buildReqRes({
       host_id: HOST_ID,
       since: '04/28/2026',
     });
     await scrapeReservationListHandler(env)(req, res);
     expect(statusSpy).toHaveBeenCalledWith(400);
+  });
+
+  it.each([
+    ['canonical-Z-millis', '2026-04-01T00:00:00.000Z'],
+    ['Z-no-millis', '2026-04-01T00:00:00Z'],
+    ['plus-offset-no-millis', '2026-04-01T00:00:00+00:00'],
+    ['minus-offset-no-millis', '2026-04-01T05:00:00-05:00'],
+    ['Z-microseconds', '2026-04-01T00:00:00.123456Z'],
+  ])('accepts %s ISO8601 since: %s', async (_name, since) => {
+    vi.mocked(browserModule.getBrowserContext).mockResolvedValue({} as never);
+    vi.mocked(browserModule.hasAirbnbSession).mockResolvedValue(true);
+    vi.mocked(scraperModule.scrapeReservationList).mockResolvedValue({
+      reservations: [],
+      scrapedAt: '2026-04-28T00:00:00.000Z',
+      accountEmail: '',
+    });
+    const { req, res, statusSpy } = buildReqRes({ host_id: HOST_ID, since });
+    await scrapeReservationListHandler(env)(req, res);
+    expect(statusSpy).toHaveBeenCalledWith(200);
   });
 
   it('accepts valid ISO8601 since', async () => {
@@ -184,6 +214,44 @@ describe('scrapeReservationListHandler', () => {
     expect(scraperModule.scrapeReservationList).not.toHaveBeenCalled();
   });
 
+  it('returns 409 auth_epoch_changed when scraper throws AND epoch rotated mid-scrape', async () => {
+    vi.mocked(browserModule.getBrowserContext).mockResolvedValue({} as never);
+    vi.mocked(browserModule.hasAirbnbSession).mockResolvedValue(true);
+    vi.mocked(scraperModule.scrapeReservationList).mockImplementation(async () => {
+      // Simulate Playwright `Target closed` while a concurrent /inject-cookies bumps the epoch.
+      beginCookieInject();
+      throw new Error('Target closed');
+    });
+    const { req, res, statusSpy, jsonSpy } = buildReqRes({ host_id: HOST_ID });
+    await scrapeReservationListHandler(env)(req, res);
+    expect(statusSpy).toHaveBeenCalledWith(409);
+    expect(jsonSpy).toHaveBeenCalledWith({ error: 'auth_epoch_changed' });
+  });
+
+  it('returns 409 auth_epoch_changed when hasAirbnbSession throws AND epoch rotated', async () => {
+    vi.mocked(browserModule.getBrowserContext).mockResolvedValue({} as never);
+    vi.mocked(browserModule.hasAirbnbSession).mockImplementation(async () => {
+      beginCookieInject();
+      throw new Error('cookie store closed');
+    });
+    const { req, res, statusSpy, jsonSpy } = buildReqRes({ host_id: HOST_ID });
+    await scrapeReservationListHandler(env)(req, res);
+    expect(statusSpy).toHaveBeenCalledWith(409);
+    expect(jsonSpy).toHaveBeenCalledWith({ error: 'auth_epoch_changed' });
+  });
+
+  it('returns 409 auth_epoch_changed when hasAirbnbSession returns false because of mid-rotation', async () => {
+    vi.mocked(browserModule.getBrowserContext).mockResolvedValue({} as never);
+    vi.mocked(browserModule.hasAirbnbSession).mockImplementation(async () => {
+      beginCookieInject();
+      return false;
+    });
+    const { req, res, statusSpy, jsonSpy } = buildReqRes({ host_id: HOST_ID });
+    await scrapeReservationListHandler(env)(req, res);
+    expect(statusSpy).toHaveBeenCalledWith(409);
+    expect(jsonSpy).toHaveBeenCalledWith({ error: 'auth_epoch_changed' });
+  });
+
   it('returns 500 with scrape_failed when scraper throws', async () => {
     vi.mocked(browserModule.getBrowserContext).mockResolvedValue({} as never);
     vi.mocked(browserModule.hasAirbnbSession).mockResolvedValue(true);
@@ -196,7 +264,7 @@ describe('scrapeReservationListHandler', () => {
     );
   });
 
-  it('returns 200 with reservations + scraped_at + account_email on happy path (real scraper, no _stub)', async () => {
+  it('returns 200 with body matching Issue #45 contract on real-scraper happy path (no X-Stub header)', async () => {
     vi.mocked(browserModule.getBrowserContext).mockResolvedValue({} as never);
     vi.mocked(browserModule.hasAirbnbSession).mockResolvedValue(true);
     vi.mocked(scraperModule.scrapeReservationList).mockResolvedValue({
@@ -213,7 +281,7 @@ describe('scrapeReservationListHandler', () => {
       accountEmail: 'host@example.com',
     });
 
-    const { req, res, statusSpy, jsonSpy } = buildReqRes({
+    const { req, res, statusSpy, jsonSpy, setHeaderSpy } = buildReqRes({
       host_id: HOST_ID,
       mode: 'incremental',
       since: '2026-04-01T00:00:00.000Z',
@@ -234,11 +302,10 @@ describe('scrapeReservationListHandler', () => {
       scraped_at: '2026-04-28T00:00:00.000Z',
       account_email: 'host@example.com',
     });
-    const sentBody = jsonSpy.mock.calls[0]?.[0] as Record<string, unknown>;
-    expect(sentBody._stub).toBeUndefined();
+    expect(setHeaderSpy).not.toHaveBeenCalledWith('X-Stub', expect.anything());
   });
 
-  it('surfaces _stub: true when stub scraper sets the flag', async () => {
+  it('sets X-Stub: true header when stub scraper sets the flag (body still matches contract)', async () => {
     vi.mocked(browserModule.getBrowserContext).mockResolvedValue({} as never);
     vi.mocked(browserModule.hasAirbnbSession).mockResolvedValue(true);
     vi.mocked(scraperModule.scrapeReservationList).mockResolvedValue({
@@ -247,14 +314,14 @@ describe('scrapeReservationListHandler', () => {
       accountEmail: '',
       stub: true,
     });
-    const { req, res, statusSpy, jsonSpy } = buildReqRes({ host_id: HOST_ID });
+    const { req, res, statusSpy, jsonSpy, setHeaderSpy } = buildReqRes({ host_id: HOST_ID });
     await scrapeReservationListHandler(env)(req, res);
     expect(statusSpy).toHaveBeenCalledWith(200);
+    expect(setHeaderSpy).toHaveBeenCalledWith('X-Stub', 'true');
     expect(jsonSpy).toHaveBeenCalledWith({
       reservations: [],
       scraped_at: '2026-04-28T00:00:00.000Z',
       account_email: '',
-      _stub: true,
     });
   });
 
