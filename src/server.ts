@@ -12,6 +12,7 @@ import { verifyHmacRequest } from './lib/hmac';
 import { healthHandler } from './endpoints/health';
 import { injectCookiesHandler } from './endpoints/inject-cookies';
 import { syncHandler } from './endpoints/sync';
+import { scrapeReservationListHandler } from './endpoints/scrape-reservation-list';
 import { closeBrowserContext } from './playwright/browser';
 
 function buildApp(env: ReturnType<typeof readEnv>) {
@@ -61,6 +62,7 @@ function buildApp(env: ReturnType<typeof readEnv>) {
 
   app.post('/inject-cookies', hmacAuth, injectCookiesHandler(env));
   app.post('/sync', hmacAuth, syncHandler(env));
+  app.post('/scrape-reservation-list', hmacAuth, scrapeReservationListHandler(env));
 
   // 404 for anything else — Fly's private-network layer already drops public traffic.
   app.use((_req, res) => {
