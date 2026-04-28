@@ -121,28 +121,40 @@ export function scrapeReservationListHandler(env: MachineEnv) {
       return res.status(403).json({ error: 'host_id_mismatch' });
     }
 
-    // Auth-epoch readiness MUST be checked before any browser/cookie read so
-    // a concurrent /inject-cookies (which sets ready=false BEFORE rewriting
-    // cookies) is detected before we can observe a half-rotated state.
+    // Auth-epoch gate. Two distinct states are blocked here:
     //
-    // Restart contract: the auth-epoch lives in process memory and starts
-    // ready=false on every Fly machine restart. The persistent profile on
-    // /data/profile may still hold valid Airbnb session cookies, but this
-    // endpoint will return 409 auth_epoch_not_ready until a fresh
-    // /inject-cookies completes. The staysync worker / provisioner saga
-    // is responsible for re-running /inject-cookies before the first
-    // /scrape-reservation-list call against any machine that may have
-    // restarted (matches the existing /sync behaviour). The tests below
-    // pin the post-restart 409 response so the contract is enforced.
-    if (!isAuthEpochReady()) {
+    //   counter > 0 && !ready  - /inject-cookies is mid-flight, has bumped the
+    //                            counter, has NOT yet verified the post-reload
+    //                            URL. Cookies may be in a half-rotated state.
+    //                            Fail closed with 409 auth_epoch_not_ready.
+    //   counter = 0 && !ready  - Fresh process state (Fly machine boot, no
+    //                            /inject-cookies has run yet). The persistent
+    //                            profile on /data/profile is authoritative;
+    //                            trust it like /sync does. Worker/provisioner
+    //                            saga is responsible for running /inject-cookies
+    //                            during onboarding so this state is short-lived.
+    //   counter > 0 && ready   - Healthy steady state. Serve.
+    //
+    // The non-zero-counter requirement is the load-bearing distinction: it
+    // prevents serving while a rotation is mid-flight, but lets a freshly
+    // booted machine with a populated profile serve immediately, matching the
+    // /sync endpoint's behaviour rather than introducing an asymmetric
+    // restart contract that the worker would have to special-case.
+    const counterAtStart = currentAuthEpoch();
+    if (counterAtStart > 0 && !isAuthEpochReady()) {
       return res.status(409).json({ error: 'auth_epoch_not_ready' });
     }
-    const epochAtStart = currentAuthEpoch();
+    const epochAtStart = counterAtStart;
 
     let ctx;
     try {
       ctx = await getBrowserContext({ profileDir: env.PROFILE_DIR });
     } catch (err) {
+      // A concurrent rotation can close an in-flight context launch; surface
+      // as retryable 409 instead of masking as 500 browser_failed.
+      if (currentAuthEpoch() !== epochAtStart) {
+        return res.status(409).json({ error: 'auth_epoch_changed' });
+      }
       return res.status(500).json({
         error: 'browser_failed',
         message: err instanceof Error ? err.message : String(err),

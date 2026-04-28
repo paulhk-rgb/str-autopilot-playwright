@@ -233,6 +233,19 @@ describe('scrapeReservationListHandler', () => {
     );
   });
 
+  it('returns 409 auth_epoch_changed when getBrowserContext throws AND epoch rotated', async () => {
+    vi.mocked(browserModule.getBrowserContext).mockImplementation(async () => {
+      // Concurrent /inject-cookies bumps epoch then closes the in-flight launch.
+      beginCookieInject();
+      throw new Error('Target closed');
+    });
+    const { req, res, statusSpy, jsonSpy } = buildReqRes({ host_id: HOST_ID });
+    await scrapeReservationListHandler(env)(req, res);
+    expect(statusSpy).toHaveBeenCalledWith(409);
+    expect(jsonSpy).toHaveBeenCalledWith({ error: 'auth_epoch_changed' });
+    expect(browserModule.readAirbnbSessionStrict).not.toHaveBeenCalled();
+  });
+
   it('returns 409 auth_epoch_not_ready when /inject-cookies has not completed', async () => {
     vi.mocked(browserModule.getBrowserContext).mockResolvedValue({} as never);
     vi.mocked(browserModule.readAirbnbSessionStrict).mockResolvedValue(true);
@@ -245,21 +258,23 @@ describe('scrapeReservationListHandler', () => {
     expect(scraperModule.scrapeReservationList).not.toHaveBeenCalled();
   });
 
-  it('returns 409 auth_epoch_not_ready on fresh-process state (Fly restart contract)', async () => {
-    // Reproduces the post-restart scenario: the Fly machine just booted, its
-    // persistent profile may still hold valid Airbnb cookies, but the in-process
-    // auth-epoch is fresh and `markAuthEpochReady` has NOT been called. Worker
-    // / provisioner saga must re-run /inject-cookies before this endpoint can
-    // serve. Test pins the 409 so a future change cannot silently let the
-    // endpoint serve before /inject-cookies has primed the epoch.
+  it('serves on fresh-process state (counter=0) when persisted profile cookies are valid', async () => {
+    // Fresh Fly machine boot: `_resetAuthEpochForTesting()` zeroes both counter
+    // and ready. No /inject-cookies has run, but the persistent profile on
+    // /data/profile is authoritative (matches /sync semantics). The endpoint
+    // must serve as long as `readAirbnbSessionStrict` confirms the persisted
+    // cookies are present — gating only on `counter > 0 && !ready`.
     vi.mocked(browserModule.getBrowserContext).mockResolvedValue({} as never);
     vi.mocked(browserModule.readAirbnbSessionStrict).mockResolvedValue(true);
-    _resetAuthEpochForTesting(); // counter=0, ready=false; no beginCookieInject either
-    const { req, res, statusSpy, jsonSpy } = buildReqRes({ host_id: HOST_ID });
+    vi.mocked(scraperModule.scrapeReservationList).mockResolvedValue({
+      reservations: [],
+      scrapedAt: '2026-04-28T00:00:00.000Z',
+      accountEmail: '',
+    });
+    _resetAuthEpochForTesting(); // counter=0, ready=false (fresh boot, no rotation)
+    const { req, res, statusSpy } = buildReqRes({ host_id: HOST_ID });
     await scrapeReservationListHandler(env)(req, res);
-    expect(statusSpy).toHaveBeenCalledWith(409);
-    expect(jsonSpy).toHaveBeenCalledWith({ error: 'auth_epoch_not_ready' });
-    expect(scraperModule.scrapeReservationList).not.toHaveBeenCalled();
+    expect(statusSpy).toHaveBeenCalledWith(200);
   });
 
   it('returns 409 auth_epoch_changed when cookies rotate mid-scrape', async () => {
