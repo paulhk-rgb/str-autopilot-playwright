@@ -6,70 +6,75 @@
  * established by /inject-cookies — no re-auth.
  *
  * Request body:
- *   { host_id: string, mode?: 'initial' | 'incremental' | 'full', since?: ISO8601 }
+ *   {
+ *     host_id: string,
+ *     mode: 'initial' | 'incremental' | 'full',
+ *     window_start: 'YYYY-MM-DD',
+ *     window_end: 'YYYY-MM-DD',
+ *     cursor?: string | null
+ *   }
  *
  * Response (success):
- *   { reservations: Reservation[], scraped_at: ISO8601, account_email: string }
+ *   {
+ *     schema_version: 3,
+ *     mode,
+ *     window_start,
+ *     window_end,
+ *     page_cursor,
+ *     next_page_cursor,
+ *     page_index,
+ *     is_complete,
+ *     scraped_at,
+ *     reservations,
+ *     diagnostics
+ *   }
  *
  * Error envelope: `{ error: string, message?: string }` — matches /sync.
  * (The older /inject-cookies endpoint uses `{ status:'error', reason }`;
  * /sync established the simpler shape and new endpoints follow that.)
  *
- * NOTE: This PR ships the endpoint contract, HMAC integration, and request
- * validation. The real Airbnb /hosting/reservations DOM scrape (status filter,
- * pagination, payout fields) is a follow-up — same staging pattern as /sync's
- * stub scraper. The endpoint currently returns an empty `reservations` array
- * with a populated `scraped_at` so downstream worker code can be wired against
- * the contract before the scraper lands.
+ * The endpoint must not return an empty successful response unless the scraper
+ * positively detects Airbnb's empty-state UI. Source-of-truth inventory cannot
+ * silently degrade to "0 reservations".
  */
 
 import type { Request, Response } from 'express';
 import type { MachineEnv } from '../lib/env';
 import { getBrowserContext, readAirbnbSessionStrict } from '../playwright/browser';
 import { currentAuthEpoch, isAuthEpochReady } from '../playwright/auth-epoch';
-import { scrapeReservationList } from '../playwright/scrape-reservations';
+import {
+  ReservationListCursorError,
+  scrapeReservationList,
+} from '../playwright/scrape-reservations';
 
 export interface Reservation {
   conf_code: string;
   guest_name: string;
   check_in: string;
   check_out: string;
-  status: string;
+  status_text: string;
   listing_id?: string | null;
+  listing_name?: string | null;
+  guest_count?: number | null;
   total_payout?: number | null;
+  guest_paid?: number | null;
+  reservation_url?: string | null;
+  conversation_airbnb_id?: string | null;
 }
 
 interface ScrapeReservationListBody {
   host_id: string;
-  mode?: 'initial' | 'incremental' | 'full';
-  since?: string;
+  mode: 'initial' | 'incremental' | 'full';
+  window_start: string;
+  window_end: string;
+  cursor?: string | null;
 }
 
 /**
- * Permissive ISO8601 / RFC3339 date-time timestamp check.
- *
- * Accepts the canonical Z-suffixed form emitted by JS `Date#toISOString()`
- * (e.g. `2026-04-01T00:00:00.000Z`) PLUS the equally valid forms callers
- * outside JS routinely produce: no fractional seconds (`2026-04-01T00:00:00Z`),
- * numeric offsets (`2026-04-01T00:00:00+00:00`), and 1-6 digit fractional
- * seconds.
- *
- * Rejects:
- *   - ambiguous/locale-dependent inputs (`2026-04-28 10:30:00`, `04/28/2026`)
- *   - date-only forms (`2026-04-01`) — contract is date-time, not date
- *   - invalid calendar dates (`2026-02-31T00:00:00Z`,
- *     `2026-02-31T00:00:00-05:00`) — `Date.parse` silently auto-corrects
- *     day-overflows that stay within ISO 31-max (e.g. Feb 31 → Mar 3)
- *     regardless of offset, so we validate Y/M/D at the component level
- *     before relying on `Date.parse`. This works uniformly across all
- *     offset variants because it inspects the wall-clock components from
- *     the input, not the UTC-normalized result.
- *
- * `Date.parse` already rejects month > 12 and day > 31 at the lexical level
- * (returns NaN), so the component check focuses on day-vs-days-in-month.
+ * Strict YYYY-MM-DD date check. The app owns window selection; the machine only
+ * verifies a bounded scrape window.
  */
-const ISO8601_REGEX =
-  /^(\d{4})-(\d{2})-(\d{2})T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/;
+const ISO_DATE_REGEX = /^(\d{4})-(\d{2})-(\d{2})$/;
 
 function daysInMonth(year: number, month: number): number {
   // `Date.UTC(year, month, 0)` rolls back to the last day of the prior month.
@@ -79,11 +84,9 @@ function daysInMonth(year: number, month: number): number {
   return new Date(Date.UTC(year, month, 0)).getUTCDate();
 }
 
-function isIso8601(s: string): boolean {
-  const m = ISO8601_REGEX.exec(s);
+function isIsoDate(s: string): boolean {
+  const m = ISO_DATE_REGEX.exec(s);
   if (!m) return false;
-  const t = Date.parse(s);
-  if (!Number.isFinite(t)) return false;
   const year = Number(m[1]);
   const month = Number(m[2]);
   const day = Number(m[3]);
@@ -97,17 +100,16 @@ function isValidBody(body: unknown): body is ScrapeReservationListBody {
   const b = body as Partial<ScrapeReservationListBody>;
   if (typeof b.host_id !== 'string' || b.host_id.length === 0) return false;
   if (
-    b.mode !== undefined &&
     b.mode !== 'initial' &&
     b.mode !== 'incremental' &&
     b.mode !== 'full'
   ) {
     return false;
   }
-  if (b.since !== undefined) {
-    if (typeof b.since !== 'string') return false;
-    if (!isIso8601(b.since)) return false;
-  }
+  if (typeof b.window_start !== 'string' || !isIsoDate(b.window_start)) return false;
+  if (typeof b.window_end !== 'string' || !isIsoDate(b.window_end)) return false;
+  if (b.window_end < b.window_start) return false;
+  if (b.cursor !== undefined && b.cursor !== null && typeof b.cursor !== 'string') return false;
   return true;
 }
 
@@ -203,25 +205,30 @@ export function scrapeReservationListHandler(env: MachineEnv) {
 
     try {
       const result = await scrapeReservationList(ctx, {
-        mode: req.body.mode ?? 'incremental',
-        since: req.body.since,
+        mode: req.body.mode,
+        window_start: req.body.window_start,
+        window_end: req.body.window_end,
+        cursor: req.body.cursor ?? null,
+        apiKey: env.AIRBNB_API_KEY,
+        cursorSecret: env.HMAC_SECRET,
       });
 
       if (currentAuthEpoch() !== epochAtStart) {
         return res.status(409).json({ error: 'auth_epoch_changed' });
       }
 
-      // Stub mode is signalled via the `X-Stub: true` response header — the
-      // 200 body matches Issue #45 exactly (`{ reservations, scraped_at,
-      // account_email }`) so strict consumer parsers cannot reject it. The
-      // staysync worker MUST inspect this header and skip persistence of empty
-      // fields (e.g. `account_email`) when set. Header disappears once the
-      // real scraper lands.
-      if (result.stub) res.setHeader('X-Stub', 'true');
       return res.status(200).json({
+        schema_version: result.schema_version,
+        mode: result.mode,
+        window_start: result.window_start,
+        window_end: result.window_end,
+        page_cursor: result.page_cursor,
+        next_page_cursor: result.next_page_cursor,
+        page_index: result.page_index,
+        is_complete: result.is_complete,
+        scraped_at: result.scraped_at,
         reservations: result.reservations,
-        scraped_at: result.scrapedAt,
-        account_email: result.accountEmail,
+        diagnostics: result.diagnostics,
       });
     } catch (err) {
       // Mid-scrape rotation typically closes the browser context, surfacing as
@@ -229,6 +236,9 @@ export function scrapeReservationListHandler(env: MachineEnv) {
       // sees 409 (retryable) rather than 500 (treated as hard failure).
       if (currentAuthEpoch() !== epochAtStart) {
         return res.status(409).json({ error: 'auth_epoch_changed' });
+      }
+      if (err instanceof ReservationListCursorError) {
+        return res.status(400).json({ error: 'malformed_cursor' });
       }
       return res.status(500).json({
         error: 'scrape_failed',

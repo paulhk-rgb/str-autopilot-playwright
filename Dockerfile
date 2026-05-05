@@ -1,6 +1,6 @@
 # Pinned Playwright base image per spec §2.4 Part R2 (Codex P1-4):
 # NEVER use :latest in production. Tag pinned; digest can be pinned via provisioner config.
-FROM mcr.microsoft.com/playwright:v1.40.0-jammy AS builder
+FROM mcr.microsoft.com/playwright:v1.59.1-noble AS builder
 
 WORKDIR /app
 
@@ -18,7 +18,7 @@ RUN npx tsc && \
     npm install --omit=dev --ignore-scripts
 
 # ---- runtime stage ----
-FROM mcr.microsoft.com/playwright:v1.40.0-jammy
+FROM mcr.microsoft.com/playwright:v1.59.1-noble
 
 # Xvfb for headful Chromium — spec Section 2.4 notes headful is preferred to avoid Airbnb
 # bot detection. The Playwright base image ships Xvfb + dbus preinstalled.
