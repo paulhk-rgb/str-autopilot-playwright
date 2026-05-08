@@ -236,6 +236,15 @@ describe('reservation detail scraper extraction helpers', () => {
     });
   });
 
+  it('tries both reservations all and reservation details routes when bootstrapping detail query', () => {
+    expect(
+      __reservationDetailScraperTestHooks.detailBootstrapUrlsForConfirmation('HMABC 123'),
+    ).toEqual([
+      'https://www.airbnb.com/hosting/reservations/all?locale=en&confirmationCode=HMABC%20123',
+      'https://www.airbnb.com/hosting/reservations/details/HMABC%20123',
+    ]);
+  });
+
   it('drops reservation-specific bootstrap variables when replaying another code', () => {
     const url = __reservationDetailScraperTestHooks.detailUrlForConfirmation(
       'https://www.airbnb.com/api/v3/StayHostingDetailsQuery/hash?operationName=StayHostingDetailsQuery&locale=en&currency=USD&variables=%7B%22confirmationCode%22%3A%22HMOLD%22%2C%22requestSource%22%3A%22RESERVATION_LIST%22%2C%22viewerTimeZoneOffset%22%3A-240%2C%22reservationId%22%3A123%2C%22listingId%22%3A456%7D&extensions=%7B%22persistedQuery%22%3A%7B%22version%22%3A1%2C%22sha256Hash%22%3A%22hash%22%7D%7D',
