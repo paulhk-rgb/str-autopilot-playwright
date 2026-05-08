@@ -144,24 +144,24 @@ describe('scrapeReservationListHandler', () => {
     );
   });
 
-  it('returns 409 auth_epoch_changed when getBrowserContext throws and epoch rotated', async () => {
+  it('returns 503 auth_epoch_changed when getBrowserContext throws and epoch rotated', async () => {
     vi.mocked(browserModule.getBrowserContext).mockImplementation(async () => {
       beginCookieInject();
       throw new Error('Target closed');
     });
     const { req, res, statusSpy, jsonSpy } = buildReqRes(VALID_BODY);
     await scrapeReservationListHandler(env)(req, res);
-    expect(statusSpy).toHaveBeenCalledWith(409);
+    expect(statusSpy).toHaveBeenCalledWith(503);
     expect(jsonSpy).toHaveBeenCalledWith({ error: 'auth_epoch_changed' });
     expect(browserModule.readAirbnbSessionStrict).not.toHaveBeenCalled();
   });
 
-  it('returns 409 auth_epoch_not_ready when /inject-cookies has not completed', async () => {
+  it('returns 503 auth_epoch_not_ready when /inject-cookies has not completed', async () => {
     _resetAuthEpochForTesting();
     beginCookieInject();
     const { req, res, statusSpy, jsonSpy } = buildReqRes(VALID_BODY);
     await scrapeReservationListHandler(env)(req, res);
-    expect(statusSpy).toHaveBeenCalledWith(409);
+    expect(statusSpy).toHaveBeenCalledWith(503);
     expect(jsonSpy).toHaveBeenCalledWith({ error: 'auth_epoch_not_ready' });
     expect(scraperModule.scrapeReservationList).not.toHaveBeenCalled();
   });
@@ -186,7 +186,7 @@ describe('scrapeReservationListHandler', () => {
     expect(statusSpy).toHaveBeenCalledWith(200);
   });
 
-  it('returns 409 auth_epoch_changed when epoch rotates between getBrowserContext and session check', async () => {
+  it('returns 503 auth_epoch_changed when epoch rotates between getBrowserContext and session check', async () => {
     vi.mocked(browserModule.getBrowserContext).mockImplementation(async () => {
       beginCookieInject();
       return {} as never;
@@ -194,13 +194,13 @@ describe('scrapeReservationListHandler', () => {
     vi.mocked(browserModule.readAirbnbSessionStrict).mockResolvedValue(true);
     const { req, res, statusSpy, jsonSpy } = buildReqRes(VALID_BODY);
     await scrapeReservationListHandler(env)(req, res);
-    expect(statusSpy).toHaveBeenCalledWith(409);
+    expect(statusSpy).toHaveBeenCalledWith(503);
     expect(jsonSpy).toHaveBeenCalledWith({ error: 'auth_epoch_changed' });
     expect(browserModule.readAirbnbSessionStrict).not.toHaveBeenCalled();
     expect(scraperModule.scrapeReservationList).not.toHaveBeenCalled();
   });
 
-  it('returns 409 auth_epoch_changed when readAirbnbSessionStrict throws and epoch rotated', async () => {
+  it('returns 503 auth_epoch_changed when readAirbnbSessionStrict throws and epoch rotated', async () => {
     vi.mocked(browserModule.getBrowserContext).mockResolvedValue({} as never);
     vi.mocked(browserModule.readAirbnbSessionStrict).mockImplementation(async () => {
       beginCookieInject();
@@ -208,11 +208,11 @@ describe('scrapeReservationListHandler', () => {
     });
     const { req, res, statusSpy, jsonSpy } = buildReqRes(VALID_BODY);
     await scrapeReservationListHandler(env)(req, res);
-    expect(statusSpy).toHaveBeenCalledWith(409);
+    expect(statusSpy).toHaveBeenCalledWith(503);
     expect(jsonSpy).toHaveBeenCalledWith({ error: 'auth_epoch_changed' });
   });
 
-  it('returns 409 auth_epoch_changed when session check returns true but epoch rotated', async () => {
+  it('returns 503 auth_epoch_changed when session check returns true but epoch rotated', async () => {
     vi.mocked(browserModule.getBrowserContext).mockResolvedValue({} as never);
     vi.mocked(browserModule.readAirbnbSessionStrict).mockImplementation(async () => {
       beginCookieInject();
@@ -220,12 +220,12 @@ describe('scrapeReservationListHandler', () => {
     });
     const { req, res, statusSpy, jsonSpy } = buildReqRes(VALID_BODY);
     await scrapeReservationListHandler(env)(req, res);
-    expect(statusSpy).toHaveBeenCalledWith(409);
+    expect(statusSpy).toHaveBeenCalledWith(503);
     expect(jsonSpy).toHaveBeenCalledWith({ error: 'auth_epoch_changed' });
     expect(scraperModule.scrapeReservationList).not.toHaveBeenCalled();
   });
 
-  it('returns 409 auth_epoch_changed when scraper throws and epoch rotated mid-scrape', async () => {
+  it('returns 503 auth_epoch_changed when scraper throws and epoch rotated mid-scrape', async () => {
     vi.mocked(browserModule.getBrowserContext).mockResolvedValue({} as never);
     vi.mocked(browserModule.readAirbnbSessionStrict).mockResolvedValue(true);
     vi.mocked(scraperModule.scrapeReservationList).mockImplementation(async () => {
@@ -234,7 +234,7 @@ describe('scrapeReservationListHandler', () => {
     });
     const { req, res, statusSpy, jsonSpy } = buildReqRes(VALID_BODY);
     await scrapeReservationListHandler(env)(req, res);
-    expect(statusSpy).toHaveBeenCalledWith(409);
+    expect(statusSpy).toHaveBeenCalledWith(503);
     expect(jsonSpy).toHaveBeenCalledWith({ error: 'auth_epoch_changed' });
   });
 
@@ -248,6 +248,35 @@ describe('scrapeReservationListHandler', () => {
     expect(jsonSpy).toHaveBeenCalledWith(
       expect.objectContaining({ error: 'scrape_failed', message: 'dom not found' }),
     );
+  });
+
+  it('returns 401 invalid_cookies when Airbnb API auth fails inside the scraper', async () => {
+    vi.mocked(browserModule.getBrowserContext).mockResolvedValue({} as never);
+    vi.mocked(browserModule.readAirbnbSessionStrict).mockResolvedValue(true);
+    vi.mocked(scraperModule.scrapeReservationList).mockRejectedValue(
+      new Error('reservation_list_api_auth_failed:401'),
+    );
+    const { req, res, statusSpy, jsonSpy } = buildReqRes(VALID_BODY);
+    await scrapeReservationListHandler(env)(req, res);
+    expect(statusSpy).toHaveBeenCalledWith(401);
+    expect(jsonSpy).toHaveBeenCalledWith({ error: 'invalid_cookies' });
+  });
+
+  it('does not allow reservation-list API auth failures to fall through to DOM fallback', async () => {
+    const { __reservationScraperTestHooks } = await vi.importActual<
+      typeof import('../src/playwright/scrape-reservations')
+    >('../src/playwright/scrape-reservations');
+
+    expect(
+      __reservationScraperTestHooks.isReservationListApiAuthError(
+        new Error('reservation_list_api_auth_failed:401'),
+      ),
+    ).toBe(true);
+    expect(
+      __reservationScraperTestHooks.isReservationListApiAuthError(
+        new Error('reservation_list_api_failed:500'),
+      ),
+    ).toBe(false);
   });
 
   it('returns schema-v3 body and does not emit the removed X-Stub header', async () => {

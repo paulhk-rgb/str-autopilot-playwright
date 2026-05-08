@@ -113,6 +113,11 @@ function isValidBody(body: unknown): body is ScrapeReservationListBody {
   return true;
 }
 
+function isAirbnbAuthFailure(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /^reservation_list_api_auth_failed:(401|403)$/.test(message);
+}
+
 export function scrapeReservationListHandler(env: MachineEnv) {
   return async (req: Request, res: Response) => {
     if (!isValidBody(req.body)) {
@@ -128,7 +133,7 @@ export function scrapeReservationListHandler(env: MachineEnv) {
     //   counter > 0 && !ready  - /inject-cookies is mid-flight, has bumped the
     //                            counter, has NOT yet verified the post-reload
     //                            URL. Cookies may be in a half-rotated state.
-    //                            Fail closed with 409 auth_epoch_not_ready.
+    //                            Fail closed with 503 auth_epoch_not_ready.
     //   counter = 0 && !ready  - Fresh process state (Fly machine boot, no
     //                            /inject-cookies has run yet). The persistent
     //                            profile on /data/profile is authoritative;
@@ -144,7 +149,7 @@ export function scrapeReservationListHandler(env: MachineEnv) {
     // restart contract that the worker would have to special-case.
     const counterAtStart = currentAuthEpoch();
     if (counterAtStart > 0 && !isAuthEpochReady()) {
-      return res.status(409).json({ error: 'auth_epoch_not_ready' });
+      return res.status(503).json({ error: 'auth_epoch_not_ready' });
     }
     const epochAtStart = counterAtStart;
 
@@ -153,9 +158,9 @@ export function scrapeReservationListHandler(env: MachineEnv) {
       ctx = await getBrowserContext({ profileDir: env.PROFILE_DIR });
     } catch (err) {
       // A concurrent rotation can close an in-flight context launch; surface
-      // as retryable 409 instead of masking as 500 browser_failed.
+      // as retryable 503 instead of masking as 500 browser_failed.
       if (currentAuthEpoch() !== epochAtStart) {
-        return res.status(409).json({ error: 'auth_epoch_changed' });
+        return res.status(503).json({ error: 'auth_epoch_changed' });
       }
       return res.status(500).json({
         error: 'browser_failed',
@@ -166,9 +171,9 @@ export function scrapeReservationListHandler(env: MachineEnv) {
     // Re-check epoch after getBrowserContext: a concurrent /inject-cookies could
     // have started rotating between the initial gate and now, in which case any
     // cookies we observe past this point may be a half-rotated mix. Surface as
-    // a retryable 409 rather than letting the call proceed into a partial scrape.
+    // a retryable 503 rather than letting the call proceed into a partial scrape.
     if (currentAuthEpoch() !== epochAtStart) {
-      return res.status(409).json({ error: 'auth_epoch_changed' });
+      return res.status(503).json({ error: 'auth_epoch_changed' });
     }
 
     let sessionOk: boolean;
@@ -176,9 +181,9 @@ export function scrapeReservationListHandler(env: MachineEnv) {
       sessionOk = await readAirbnbSessionStrict(ctx);
     } catch (err) {
       // A concurrent rotation may have closed the cookie store mid-call; surface
-      // the rotation as 409 instead of masking it as 500 session_check_failed.
+      // the rotation as 503 instead of masking it as 500 session_check_failed.
       if (currentAuthEpoch() !== epochAtStart) {
-        return res.status(409).json({ error: 'auth_epoch_changed' });
+        return res.status(503).json({ error: 'auth_epoch_changed' });
       }
       return res.status(500).json({
         error: 'session_check_failed',
@@ -190,7 +195,7 @@ export function scrapeReservationListHandler(env: MachineEnv) {
       // may have produced the false return; that's a retryable rotation, not a
       // permanently invalid session.
       if (currentAuthEpoch() !== epochAtStart) {
-        return res.status(409).json({ error: 'auth_epoch_changed' });
+        return res.status(503).json({ error: 'auth_epoch_changed' });
       }
       return res.status(401).json({ error: 'invalid_cookies' });
     }
@@ -198,9 +203,9 @@ export function scrapeReservationListHandler(env: MachineEnv) {
     // Re-check epoch after a TRUE session result: the cookies we just observed
     // could have been the in-flight mid-rotation set. If the epoch shifted, the
     // session validity we just confirmed is potentially stale — fail closed
-    // with 409 rather than starting a scrape against a half-rotated context.
+    // with 503 rather than starting a scrape against a half-rotated context.
     if (currentAuthEpoch() !== epochAtStart) {
-      return res.status(409).json({ error: 'auth_epoch_changed' });
+      return res.status(503).json({ error: 'auth_epoch_changed' });
     }
 
     try {
@@ -214,7 +219,7 @@ export function scrapeReservationListHandler(env: MachineEnv) {
       });
 
       if (currentAuthEpoch() !== epochAtStart) {
-        return res.status(409).json({ error: 'auth_epoch_changed' });
+        return res.status(503).json({ error: 'auth_epoch_changed' });
       }
 
       return res.status(200).json({
@@ -233,12 +238,15 @@ export function scrapeReservationListHandler(env: MachineEnv) {
     } catch (err) {
       // Mid-scrape rotation typically closes the browser context, surfacing as
       // a Playwright `Target closed` throw. Re-check the epoch so the worker
-      // sees 409 (retryable) rather than 500 (treated as hard failure).
+      // sees 503 (retryable) rather than 500 (treated as hard failure).
       if (currentAuthEpoch() !== epochAtStart) {
-        return res.status(409).json({ error: 'auth_epoch_changed' });
+        return res.status(503).json({ error: 'auth_epoch_changed' });
       }
       if (err instanceof ReservationListCursorError) {
         return res.status(400).json({ error: 'malformed_cursor' });
+      }
+      if (isAirbnbAuthFailure(err)) {
+        return res.status(401).json({ error: 'invalid_cookies' });
       }
       return res.status(500).json({
         error: 'scrape_failed',

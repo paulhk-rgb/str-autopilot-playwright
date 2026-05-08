@@ -193,6 +193,35 @@ describe('reservation detail scraper extraction helpers', () => {
     expect(detail).toBeNull();
   });
 
+  it('rejects detail payloads that identify a different confirmation code', () => {
+    const matching = __reservationDetailScraperTestHooks.extractReservationDetailFromJson(
+      'HMABC123',
+      detailPayload({ confirmationCode: 'hmabc123' }),
+      'USD',
+    );
+    const mismatched = __reservationDetailScraperTestHooks.extractReservationDetailFromJson(
+      'HMABC123',
+      detailPayload({ confirmationCode: 'HMDIFFERENT' }),
+      'USD',
+    );
+    const mismatchedFutureFormat = __reservationDetailScraperTestHooks.extractReservationDetailFromJson(
+      'HMABC123',
+      detailPayload({ confirmationCode: 'LEGACY123' }),
+      'USD',
+    );
+
+    expect(matching?.conf_code).toBe('HMABC123');
+    expect(mismatched).toBeNull();
+    expect(mismatchedFutureFormat).toBeNull();
+    expect(
+      Array.from(
+        __reservationDetailScraperTestHooks.collectPayloadConfirmationCodes({
+          nested: { confirmationCodeMA: 'hmabc123' },
+        }),
+      ),
+    ).toEqual(['HMABC123']);
+  });
+
   it('rewrites only the confirmation code variable in a bootstrapped query URL', () => {
     const url = __reservationDetailScraperTestHooks.detailUrlForConfirmation(
       'https://www.airbnb.com/api/v3/StayHostingDetailsQuery/hash?operationName=StayHostingDetailsQuery&locale=en&currency=USD&variables=%7B%22confirmationCode%22%3A%22HMOLD%22%2C%22requestSource%22%3A%22RESERVATION_LIST%22%2C%22viewerTimeZoneOffset%22%3A-240%7D&extensions=%7B%22persistedQuery%22%3A%7B%22version%22%3A1%2C%22sha256Hash%22%3A%22hash%22%7D%7D',
@@ -257,9 +286,19 @@ describe('reservation detail scraper extraction helpers', () => {
     expect(__reservationDetailScraperTestHooks.isRetriableDetailStatus(404)).toBe(false);
   });
 
+  it('extracts GraphQL error messages for per-reservation missing-detail handling', () => {
+    expect(
+      __reservationDetailScraperTestHooks.graphqlErrors({
+        errors: [{ message: 'Reservation not found' }, { message: 'Access restricted' }],
+      }),
+    ).toBe('Reservation not found; Access restricted');
+    expect(__reservationDetailScraperTestHooks.graphqlErrors(detailPayload())).toBeNull();
+  });
+
   it('validates endpoint body limits and duplicate codes', () => {
     const { isValidBody } = __scrapeReservationDetailsEndpointTestHooks;
     expect(isValidBody({ host_id: 'h', confirmation_codes: ['HMABC123'] })).toBe(true);
+    expect(isValidBody({ host_id: 'h', confirmation_codes: ['HMABCDEFG'] })).toBe(true);
     expect(isValidBody({ host_id: 'h', confirmation_codes: [] })).toBe(false);
     expect(isValidBody({ host_id: 'h', confirmation_codes: ['HMABC123', 'hmabc123'] })).toBe(false);
     expect(
@@ -268,5 +307,12 @@ describe('reservation detail scraper extraction helpers', () => {
         confirmation_codes: Array.from({ length: 26 }, (_, index) => `HMABC${index}123`),
       }),
     ).toBe(false);
+  });
+
+  it('classifies Airbnb detail API auth failures for endpoint reauth handling', () => {
+    const { isAirbnbAuthFailure } = __scrapeReservationDetailsEndpointTestHooks;
+    expect(isAirbnbAuthFailure(new Error('reservation_detail_api_failed:401'))).toBe(true);
+    expect(isAirbnbAuthFailure(new Error('reservation_detail_api_failed:403'))).toBe(true);
+    expect(isAirbnbAuthFailure(new Error('reservation_detail_api_failed:500'))).toBe(false);
   });
 });

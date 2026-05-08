@@ -86,6 +86,10 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+function isReservationListApiAuthError(err: unknown): boolean {
+  return /^reservation_list_api_auth_failed:(401|403)$/.test(errorMessage(err));
+}
+
 function pageBudget(mode: ScrapeReservationsOptions['mode']): number {
   switch (mode) {
     case 'full':
@@ -1050,6 +1054,7 @@ export async function scrapeReservationList(
       apiResult = await readReservationsViaApi(ctx, bootstrap, opts);
     } catch (err) {
       if (err instanceof ReservationListCursorError) throw err;
+      if (isReservationListApiAuthError(err)) throw err;
       if (opts.cursor !== null) throw err;
       apiResult = null;
     }
@@ -1177,6 +1182,7 @@ export const __reservationScraperTestHooks = {
   extractReservationFromObject,
   filterByWindow,
   hasEmptyState,
+  isReservationListApiAuthError,
   mergeReservations,
   normalizeDate,
   numberish,

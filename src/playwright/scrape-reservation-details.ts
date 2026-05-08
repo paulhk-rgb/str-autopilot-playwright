@@ -80,7 +80,7 @@ const DETAIL_REQUEST_SOURCE = 'RESERVATION_LIST';
 const DETAIL_MAX_ATTEMPTS = 3;
 const DETAIL_RETRY_BASE_MS = 700;
 const DETAIL_REPLAY_DELAY_MS = 350;
-const CONF_CODE_RE = /^(?=.*[a-z])(?=.*\d)[a-z0-9-]{6,}$/i;
+const CONF_CODE_RE = /^HM[A-Z0-9-]{6,}$/i;
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -237,6 +237,45 @@ function confirmationCodeFromDetailUrl(url: string): string | null {
   }
 }
 
+function collectPayloadConfirmationCodes(value: unknown): Set<string> {
+  const codes = new Set<string>();
+  const seen = new Set<unknown>();
+  const codeKeys = new Set([
+    'confirmationCode',
+    'confirmationCodeMA',
+    'confirmation_code',
+    'reservationCode',
+    'reservation_code',
+  ]);
+
+  function walk(node: unknown): void {
+    if (!node || typeof node !== 'object' || seen.has(node)) return;
+    seen.add(node);
+    if (Array.isArray(node)) {
+      for (const child of node) walk(child);
+      return;
+    }
+    const obj = node as Record<string, unknown>;
+    for (const [key, child] of Object.entries(obj)) {
+      if (codeKeys.has(key)) {
+        const code = textish(child);
+        if (code) {
+          codes.add(normalizeConfirmationCode(code));
+        }
+      }
+      walk(child);
+    }
+  }
+
+  walk(value);
+  return codes;
+}
+
+function payloadMatchesConfirmationCode(value: unknown, confCode: string): boolean {
+  const codes = collectPayloadConfirmationCodes(value);
+  return codes.size === 0 || codes.has(normalizeConfirmationCode(confCode));
+}
+
 function selectBootstrapDetailCandidate(
   candidates: JsonCandidate[],
   confirmationCode: string,
@@ -345,7 +384,7 @@ async function fetchDetailJson(input: {
         throw new Error('reservation_detail_api_malformed_json');
       }
       const errors = graphqlErrors(value);
-      if (errors) throw new Error(`reservation_detail_graphql_errors:${errors}`);
+      if (errors) return { ok: false, reason: `reservation_detail_graphql_errors:${errors}` };
       return { ok: true, value };
     }
     lastReason = `reservation_detail_api_failed:${status}`;
@@ -520,6 +559,7 @@ export function extractReservationDetailFromJson(
 ): ScrapedReservationDetail | null {
   const confCode = normalizeConfirmationCode(confCodeRaw);
   if (!CONF_CODE_RE.test(confCode)) return null;
+  if (!payloadMatchesConfirmationCode(value, confCode)) return null;
   const section = findPaymentSection(value);
   if (!section) return null;
   const guestPaidGroup = parseFinancialGroup(section.guestPaidGroup);
@@ -590,7 +630,10 @@ export async function scrapeReservationDetails(
       continue;
     }
     const errors = graphqlErrors(valueResult.value);
-    if (errors) throw new Error(`reservation_detail_graphql_errors:${errors}`);
+    if (errors) {
+      missingDetails.push({ conf_code: confCode, reason: `reservation_detail_graphql_errors:${errors}` });
+      continue;
+    }
     const detail = extractReservationDetailFromJson(confCode, valueResult.value, bootstrap.currencyHint);
     if (!detail) {
       missingDetails.push({ conf_code: confCode, reason: 'reservation_detail_payment_section_missing' });
@@ -609,8 +652,10 @@ export async function scrapeReservationDetails(
 
 export const __reservationDetailScraperTestHooks = {
   confirmationCodeFromDetailUrl,
+  collectPayloadConfirmationCodes,
   detailUrlForConfirmation,
   extractReservationDetailFromJson,
+  graphqlErrors,
   isFatalDetailStatus,
   isRetriableDetailStatus,
   isKnownHostAdjustmentLine,
