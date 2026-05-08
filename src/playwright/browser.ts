@@ -17,6 +17,9 @@ const STEALTH_ARGS = [
 ];
 
 const IGNORE_DEFAULT_ARGS = ['--enable-automation'];
+const AIRBNB_USER_AGENT =
+  process.env.AIRBNB_USER_AGENT ??
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36';
 
 let ctxPromise: Promise<BrowserContext> | null = null;
 let lastAirbnbRequestAt: Date | null = null;
@@ -44,9 +47,7 @@ export async function getBrowserContext(opts: BrowserOptions): Promise<BrowserCo
     args: STEALTH_ARGS,
     ignoreDefaultArgs: IGNORE_DEFAULT_ARGS,
     // Airbnb's rate-limiter is UA-sensitive — explicit UA avoids headless-chrome fingerprint leakage.
-    userAgent:
-      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) ' +
-      'Chrome/120.0.0.0 Safari/537.36',
+    userAgent: AIRBNB_USER_AGENT,
   });
 
   const ctx = await ctxPromise;

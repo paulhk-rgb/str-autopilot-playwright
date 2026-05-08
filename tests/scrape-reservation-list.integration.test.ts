@@ -45,6 +45,13 @@ import type { MachineEnv } from '../src/lib/env';
 
 const HMAC_SECRET = '7b2e2f1a0d6c4e6e89ab22c3f4d5e6a7b8c9d0e1f2a3b4c5d6e7f8091a2b3c4d';
 const HOST_ID = '11111111-2222-3333-4444-555555555555';
+const VALID_BODY = {
+  host_id: HOST_ID,
+  mode: 'full',
+  window_start: '2026-01-01',
+  window_end: '2026-12-31',
+  cursor: null,
+};
 
 const env: MachineEnv = {
   HMAC_SECRET,
@@ -122,7 +129,7 @@ describe('/scrape-reservation-list HMAC integration', () => {
     const r = await fetch(`${baseUrl}/scrape-reservation-list`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ host_id: HOST_ID }),
+      body: JSON.stringify(VALID_BODY),
     });
     expect(r.status).toBe(401);
     const j = (await r.json()) as { error: string };
@@ -130,7 +137,7 @@ describe('/scrape-reservation-list HMAC integration', () => {
   });
 
   it('rejects POST with tampered signature with 401', async () => {
-    const body = Buffer.from(JSON.stringify({ host_id: HOST_ID }), 'utf8');
+    const body = Buffer.from(JSON.stringify(VALID_BODY), 'utf8');
     const headers = signedHeaders({
       method: 'POST',
       path: '/scrape-reservation-list',
@@ -146,7 +153,7 @@ describe('/scrape-reservation-list HMAC integration', () => {
   });
 
   it('rejects POST with mismatched X-Body-Hash header with 401', async () => {
-    const body = Buffer.from(JSON.stringify({ host_id: HOST_ID }), 'utf8');
+    const body = Buffer.from(JSON.stringify(VALID_BODY), 'utf8');
     const headers = signedHeaders({
       method: 'POST',
       path: '/scrape-reservation-list',
@@ -162,7 +169,7 @@ describe('/scrape-reservation-list HMAC integration', () => {
   });
 
   it('reaches the handler when signature is valid (handler returns 401 invalid_cookies via mocked session gate)', async () => {
-    const body = Buffer.from(JSON.stringify({ host_id: HOST_ID }), 'utf8');
+    const body = Buffer.from(JSON.stringify(VALID_BODY), 'utf8');
     const headers = signedHeaders({
       method: 'POST',
       path: '/scrape-reservation-list',

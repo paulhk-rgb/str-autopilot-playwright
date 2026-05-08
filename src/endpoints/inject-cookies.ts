@@ -131,7 +131,7 @@ export function injectCookiesHandler(env: MachineEnv) {
     const page = await openPage(ctx);
     try {
       markAirbnbRequest();
-      await page.goto('https://www.airbnb.com/hosting/today', {
+      await page.goto('https://www.airbnb.com/hosting', {
         waitUntil: 'domcontentloaded',
         timeout: 30_000,
       });
@@ -146,8 +146,15 @@ export function injectCookiesHandler(env: MachineEnv) {
       // page would otherwise be treated as success. authEpoch.ready=true is
       // only safe when we KNOW we landed in the host dashboard.
       if (!urlAfterNav.includes('/hosting')) {
+        let safeUrl = urlAfterNav;
+        try {
+          const parsed = new URL(urlAfterNav);
+          safeUrl = `${parsed.origin}${parsed.pathname}`;
+        } catch {
+          safeUrl = urlAfterNav.split('?')[0] ?? urlAfterNav;
+        }
         // eslint-disable-next-line no-console
-        console.warn(`inject-cookies post-nav URL not /hosting (got non-login redirect)`);
+        console.warn(`inject-cookies post-nav URL not /hosting: ${safeUrl}`);
         return res.status(401).json({ status: 'error', reason: 'invalid_cookies' });
       }
 
