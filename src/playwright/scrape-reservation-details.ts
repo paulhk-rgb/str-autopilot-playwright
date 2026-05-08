@@ -75,6 +75,7 @@ interface DetailBootstrap {
 }
 
 const RESERVATIONS_URL = 'https://www.airbnb.com/hosting/reservations/all';
+const RESERVATION_DETAILS_URL = 'https://www.airbnb.com/hosting/reservations/details';
 const DETAIL_QUERY_NAME = 'StayHostingDetailsQuery';
 const DETAIL_REQUEST_SOURCE = 'RESERVATION_LIST';
 const DETAIL_MAX_ATTEMPTS = 3;
@@ -224,6 +225,14 @@ function detailUrlForConfirmation(templateUrl: string, confCode: string): string
   return parsed.toString();
 }
 
+function detailBootstrapUrlsForConfirmation(confirmationCode: string): string[] {
+  const encodedCode = encodeURIComponent(confirmationCode);
+  return [
+    `${RESERVATIONS_URL}?locale=en&confirmationCode=${encodedCode}`,
+    `${RESERVATION_DETAILS_URL}/${encodedCode}`,
+  ];
+}
+
 function confirmationCodeFromDetailUrl(url: string): string | null {
   try {
     const parsed = new URL(url);
@@ -299,41 +308,66 @@ async function bootstrapDetailQuery(
 ): Promise<DetailBootstrap> {
   const page = await ctx.newPage();
   try {
-    const bootstrapUrl = `${RESERVATIONS_URL}?locale=en&confirmationCode=${encodeURIComponent(confirmationCode)}`;
-    let bootstrapNavigationError: string | null = null;
-    const candidates = await collectDetailCandidates(page, async () => {
-      await page.goto(bootstrapUrl, { waitUntil: 'commit', timeout: 60_000 }).catch((err) => {
-        bootstrapNavigationError = errorMessage(err);
-        console.warn('reservation_detail_bootstrap_goto_failed', {
-          confirmationCode,
-          message: bootstrapNavigationError,
+    const navigationErrors: string[] = [];
+    let reusableFallback: ReturnType<typeof selectBootstrapDetailCandidate> | null = null;
+
+    for (const bootstrapUrl of detailBootstrapUrlsForConfirmation(confirmationCode)) {
+      const candidates = await collectDetailCandidates(page, async () => {
+        await page.goto(bootstrapUrl, { waitUntil: 'commit', timeout: 60_000 }).catch((err) => {
+          const message = errorMessage(err);
+          navigationErrors.push(`${bootstrapUrl}: ${message}`);
+          console.warn('reservation_detail_bootstrap_goto_failed', {
+            confirmationCode,
+            route: bootstrapUrl.includes('/details/') ? 'details' : 'all',
+            message,
+          });
         });
+        await page.waitForLoadState('domcontentloaded', { timeout: 30_000 }).catch(() => undefined);
+        await page.waitForLoadState('networkidle', { timeout: 10_000 }).catch(() => undefined);
+        await page.waitForTimeout(3000);
       });
-      await page.waitForLoadState('domcontentloaded', { timeout: 30_000 }).catch(() => undefined);
-      await page.waitForLoadState('networkidle', { timeout: 10_000 }).catch(() => undefined);
-      await page.waitForTimeout(3000);
-    });
-    const { templateCandidate, reusableFirstCandidate } = selectBootstrapDetailCandidate(
-      candidates,
-      confirmationCode,
-    );
+      const selected = selectBootstrapDetailCandidate(candidates, confirmationCode);
+      if (selected.templateCandidate && selected.reusableFirstCandidate) {
+        return buildDetailBootstrap({
+          templateCandidate: selected.templateCandidate,
+          reusableFirstCandidate: selected.reusableFirstCandidate,
+        }, apiKey);
+      }
+      if (selected.templateCandidate && !reusableFallback) reusableFallback = selected;
+    }
+
+    const { templateCandidate, reusableFirstCandidate } = reusableFallback ?? {
+      templateCandidate: null,
+      reusableFirstCandidate: null,
+    };
     if (!templateCandidate) {
       console.warn('reservation_detail_query_bootstrap_missing', {
         confirmationCode,
-        navigationError: bootstrapNavigationError,
+        navigationError: navigationErrors[0] ?? null,
+        navigationErrors,
       });
       throw new Error('reservation_detail_query_bootstrap_missing');
     }
-    const parsed = new URL(templateCandidate.sourceUrl);
-    return {
-      templateUrl: templateCandidate.sourceUrl,
-      headers: detailHeadersFromBootstrap(templateCandidate, apiKey),
-      firstCandidate: reusableFirstCandidate,
-      currencyHint: textish(parsed.searchParams.get('currency'))?.toUpperCase() ?? null,
-    };
+    return buildDetailBootstrap({ templateCandidate, reusableFirstCandidate }, apiKey);
   } finally {
     await page.close().catch(() => undefined);
   }
+}
+
+function buildDetailBootstrap(
+  selected: {
+    templateCandidate: JsonCandidate;
+    reusableFirstCandidate: JsonCandidate | null;
+  },
+  apiKey: string | null | undefined,
+): DetailBootstrap {
+  const parsed = new URL(selected.templateCandidate.sourceUrl);
+  return {
+    templateUrl: selected.templateCandidate.sourceUrl,
+    headers: detailHeadersFromBootstrap(selected.templateCandidate, apiKey),
+    firstCandidate: selected.reusableFirstCandidate,
+    currencyHint: textish(parsed.searchParams.get('currency'))?.toUpperCase() ?? null,
+  };
 }
 
 function graphqlErrors(value: unknown): string | null {
@@ -653,6 +687,7 @@ export async function scrapeReservationDetails(
 export const __reservationDetailScraperTestHooks = {
   confirmationCodeFromDetailUrl,
   collectPayloadConfirmationCodes,
+  detailBootstrapUrlsForConfirmation,
   detailUrlForConfirmation,
   extractReservationDetailFromJson,
   graphqlErrors,
