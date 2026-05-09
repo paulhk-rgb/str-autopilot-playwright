@@ -66,6 +66,18 @@ interface InboxThreadSummary {
   stayText?: string;
 }
 
+interface InboxPageDiag {
+  url: string;
+  title: string;
+  inboxLinks: number;
+  anyAnchors: number;
+  anyDataTestIds: number;
+  loaderPresent: boolean;
+  emptyStateVisible: boolean;
+  sampleTestIds: string[];
+  bodyText: string;
+}
+
 const MONTH_INDEX: Record<string, number> = {
   jan: 0,
   january: 0,
@@ -95,6 +107,9 @@ const MONTH_INDEX: Record<string, number> = {
 
 const MONTH_PATTERN =
   'Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?';
+const EMPTY_INBOX_TEXT_PATTERN_SOURCE =
+  "\\b(no messages|no conversations|all caught up|don['’]t have any messages|do not have any messages|you have no messages)\\b";
+const EMPTY_INBOX_TEXT_PATTERN = new RegExp(EMPTY_INBOX_TEXT_PATTERN_SOURCE, 'i');
 
 function normalizeSidebarText(text: string): string {
   return text
@@ -176,6 +191,10 @@ function likelyListingFromTail(tail: string): string | undefined {
   }
 
   return undefined;
+}
+
+function isExplicitEmptyInboxText(bodyText: string): boolean {
+  return EMPTY_INBOX_TEXT_PATTERN.test(bodyText);
 }
 
 function parseInboxThreadSummary(
@@ -275,36 +294,14 @@ function stableMessageId(
   return h.digest('hex').slice(0, 32);
 }
 
-async function listInboxThreads(page: Page, max: number): Promise<InboxThreadSummary[]> {
-  await page.goto('https://www.airbnb.com/hosting/messages', {
-    waitUntil: 'domcontentloaded',
-    timeout: 30_000,
-  });
-  // Inbox starts behind a `[data-testid="inbox-list-loader"]` spinner.
-  // Wait for it to detach OR an inbox row to appear. Either resolution
-  // means the SPA finished its initial fetch.
-  await Promise.race([
-    page
-      .waitForSelector('a[data-testid^="inbox_list_"]', { timeout: 45_000 })
-      .catch(() => undefined),
-    page
-      .waitForSelector('[data-testid="inbox-list-loader"]', {
-        state: 'detached',
-        timeout: 45_000,
-      })
-      .catch(() => undefined),
-  ]);
-  // Brief settle so DOM mounts after loader detach
-  await page.waitForTimeout(1500);
-
-  // Diagnostic snapshot — surfaces redirect destinations + DOM availability
-  // when scraper returns zero threads. Logged to stdout (Fly logs).
-  const diag = await page.evaluate(() => {
-    type EL = { getAttribute(n: string): string | null };
+async function collectInboxDiag(page: Page): Promise<InboxPageDiag> {
+  return page.evaluate((emptyInboxTextPatternSource) => {
+    type EL = { getAttribute(n: string): string | null; textContent?: string | null };
     const doc = (globalThis as unknown as {
       document: {
         title: string;
         body: { innerText: string };
+        querySelector(sel: string): EL | null;
         querySelectorAll(sel: string): ArrayLike<EL> & { length: number };
       };
     }).document;
@@ -315,21 +312,25 @@ async function listInboxThreads(page: Page, max: number): Promise<InboxThreadSum
       const v = testIdEls[i].getAttribute('data-testid');
       if (v) testIds.push(v);
     }
+    const inboxPanelText =
+      doc.querySelector('[data-testid="inbox-container-marker"]')?.textContent || '';
+    const emptyPattern = new RegExp(emptyInboxTextPatternSource, 'i');
     return {
       url: w.href,
       title: doc.title,
       inboxLinks: doc.querySelectorAll('a[data-testid^="inbox_list_"]').length,
       anyAnchors: doc.querySelectorAll('a').length,
       anyDataTestIds: testIdEls.length,
+      loaderPresent: Boolean(doc.querySelector('[data-testid="inbox-list-loader"]')),
+      emptyStateVisible: emptyPattern.test(inboxPanelText),
       sampleTestIds: testIds,
       bodyText: (doc.body?.innerText || '').slice(0, 800),
     };
-  });
-  console.log('[scrape-inbox] inbox-page diag:', JSON.stringify(diag));
-  // Echo into a side-channel global so the handler can include in response.
-  (globalThis as unknown as { __lastInboxDiag?: unknown }).__lastInboxDiag = diag;
+  }, EMPTY_INBOX_TEXT_PATTERN_SOURCE);
+}
 
-  const threads = await page.evaluate(() => {
+async function readRawInboxThreads(page: Page): Promise<Array<{ id: string; text: string }>> {
+  return page.evaluate(() => {
     type EL = {
       getAttribute(n: string): string | null;
       textContent: string | null;
@@ -345,18 +346,111 @@ async function listInboxThreads(page: Page, max: number): Promise<InboxThreadSum
     });
     return out;
   });
+}
 
-  // Dedup while preserving order; cap to budget.
-  const seen = new Set<string>();
-  const unique: InboxThreadSummary[] = [];
-  for (const thread of threads) {
-    const id = thread.id;
-    if (seen.has(id)) continue;
-    seen.add(id);
-    unique.push(parseInboxThreadSummary(id, thread.text));
-    if (unique.length >= max) break;
+async function waitForInboxRowsOrEmpty(page: Page, timeoutMs: number): Promise<void> {
+  await page
+    .waitForFunction(
+      (emptyInboxTextPatternSource) => {
+        type WaitDoc = {
+          body?: { innerText?: string };
+          querySelector(sel: string): { textContent?: string | null } | null;
+          querySelectorAll(sel: string): { length: number };
+        };
+        const doc = (globalThis as unknown as { document: WaitDoc }).document;
+        if (doc.querySelectorAll('a[data-testid^="inbox_list_"]').length > 0) return true;
+        const inboxPanelText =
+          doc.querySelector('[data-testid="inbox-container-marker"]')?.textContent || '';
+        return new RegExp(emptyInboxTextPatternSource, 'i').test(inboxPanelText);
+      },
+      EMPTY_INBOX_TEXT_PATTERN_SOURCE,
+      { timeout: timeoutMs },
+    )
+    .catch(() => undefined);
+}
+
+function logInboxDiag(diag: InboxPageDiag): void {
+  console.log('[scrape-inbox] inbox-page diag:', JSON.stringify(diag));
+  // Echo into a side-channel global so the handler can include in response.
+  (globalThis as unknown as { __lastInboxDiag?: unknown }).__lastInboxDiag = diag;
+}
+
+async function listInboxThreads(page: Page, max: number): Promise<InboxThreadSummary[]> {
+  let lastDiag: InboxPageDiag | null = null;
+
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    if (attempt === 1) {
+      await page.goto('https://www.airbnb.com/hosting/messages', {
+        waitUntil: 'domcontentloaded',
+        timeout: 30_000,
+      });
+    } else {
+      console.warn('[scrape-inbox] retrying inbox list after unloaded sidebar', {
+        prior_url: lastDiag?.url,
+        prior_loader_present: lastDiag?.loaderPresent,
+        prior_inbox_links: lastDiag?.inboxLinks,
+      });
+      const reloadError = await page
+        .reload({ waitUntil: 'domcontentloaded', timeout: 30_000 })
+        .then(() => null)
+        .catch((err) => err);
+      if (reloadError) {
+        console.warn('[scrape-inbox] inbox reload failed before retry', {
+          error: reloadError instanceof Error ? reloadError.message : String(reloadError),
+        });
+      }
+    }
+
+    // Airbnb's sidebar can sit behind `[data-testid="inbox-list-loader"]`.
+    // Wait for actual rows or an explicit empty state; loader disappearance
+    // alone is not enough because we observed production returning a bare
+    // shell (`Messages` + loader) that would otherwise be mistaken for success.
+    await waitForInboxRowsOrEmpty(page, attempt === 1 ? 45_000 : 15_000);
+    await page.waitForTimeout(1500);
+
+    lastDiag = await collectInboxDiag(page);
+    logInboxDiag(lastDiag);
+
+    if (lastDiag.inboxLinks === 0) {
+      if (lastDiag.emptyStateVisible) {
+        return [];
+      }
+      continue;
+    }
+
+    const threads = await readRawInboxThreads(page);
+
+    // Dedup while preserving order; cap to budget.
+    const seen = new Set<string>();
+    const unique: InboxThreadSummary[] = [];
+    for (const thread of threads) {
+      const id = thread.id;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      unique.push(parseInboxThreadSummary(id, thread.text));
+      if (unique.length >= max) break;
+    }
+
+    if (unique.length > 0) return unique;
+    console.warn('[scrape-inbox] inbox anchors rendered without readable thread ids', {
+      anchor_count: lastDiag.inboxLinks,
+      raw_thread_count: threads.length,
+    });
   }
-  return unique;
+
+  const diag = lastDiag;
+  throw new Error(
+    [
+      'inbox_list_unavailable',
+      diag ? `url=${diag.url}` : null,
+      diag ? `loader=${diag.loaderPresent}` : null,
+      diag ? `links=${diag.inboxLinks}` : null,
+      diag ? `anchors=${diag.anyAnchors}` : null,
+      diag ? `testids=${diag.anyDataTestIds}` : null,
+    ]
+      .filter(Boolean)
+      .join(':'),
+  );
 }
 
 async function readThread(
@@ -533,4 +627,6 @@ export async function scrapeInbox(
 
 export const __scrapeInboxTestHooks = {
   parseInboxThreadSummary,
+  isExplicitEmptyInboxText,
+  listInboxThreads,
 };
