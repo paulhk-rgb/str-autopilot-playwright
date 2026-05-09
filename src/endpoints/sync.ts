@@ -69,6 +69,32 @@ function chunk<T>(arr: T[], size: number): T[][] {
   return out;
 }
 
+function canRunApiReader(env: MachineEnv): boolean {
+  return Boolean(env.AIRBNB_API_USER_ID && env.AIRBNB_API_GLOBAL_USER_ID);
+}
+
+function shouldRecoverZeroMessageUiReadWithApi(
+  mode: SyncBody['mode'],
+  messages: ScrapedMessage[],
+  errors: string[],
+): boolean {
+  if (messages.length > 0) return false;
+  if (
+    mode !== 'incremental' &&
+    errors.some((err) => String(err).startsWith('sync_time_budget_exhausted'))
+  ) {
+    return false;
+  }
+  return errors.some((err) => {
+    const text = String(err);
+    return (
+      /^thread_[^:]+_failed: thread_message_list_unavailable(?:$|:)/.test(text) ||
+      (mode === 'incremental' && text.startsWith('sync_time_budget_exhausted')) ||
+      text.startsWith('inbox_list_failed: inbox_list_unavailable')
+    );
+  });
+}
+
 export function syncHandler(env: MachineEnv) {
   return async (req: Request, res: Response) => {
     if (!isValidSyncBody(req.body)) {
@@ -115,9 +141,10 @@ export function syncHandler(env: MachineEnv) {
       let bookingsFound = 0;
       const errors: string[] = [];
       let apiDiag: unknown = null;
-      // commitWatermarks is invoked AFTER all callback batches return 2xx (api
-      // mode only). No-op in ui/shadow modes. Spec §4 step 6 + audit B2.
+      // commitWatermarks is invoked AFTER all callback batches return 2xx for
+      // any API-emission path. No-op for plain ui/shadow paths.
       let commitWatermarks: () => void = () => undefined;
+      let commitApiWatermarksOnCallbackSuccess = false;
 
       if (env.INBOX_READER_MODE === 'ui') {
         const uiResult = await scrapeInbox(ctx, {
@@ -127,7 +154,31 @@ export function syncHandler(env: MachineEnv) {
         });
         messages = uiResult.messages;
         bookingsFound = uiResult.bookingsFound;
-        errors.push(...uiResult.errors);
+        const uiErrors = uiResult.errors;
+        if (
+          shouldRecoverZeroMessageUiReadWithApi(req.body.mode, messages, uiErrors) &&
+          canRunApiReader(env)
+        ) {
+          const apiResult = await runApiReaderEmissionCycle(ctx, env);
+          apiDiag = {
+            fallback: 'ui_zero_message_recovery',
+            uiMessageCount: uiResult.messages.length,
+            uiErrors: uiErrors.slice(0, 10),
+            messagesEmitted: apiResult.messages.length,
+            error: apiResult.error,
+            result: apiResult.diag,
+          };
+          if (apiResult.error) {
+            errors.push(...uiErrors);
+            errors.push(`api_fallback_failed: ${apiResult.error}`);
+          } else {
+            messages = apiResult.messages;
+            commitWatermarks = apiResult.commitWatermarks;
+            commitApiWatermarksOnCallbackSuccess = true;
+          }
+        } else {
+          errors.push(...uiErrors);
+        }
       } else if (env.INBOX_READER_MODE === 'shadow') {
         // Run UI THEN API sequentially to avoid execution-context collisions
         // on the shared page. UI remains sole callback emitter; API output is
@@ -151,6 +202,7 @@ export function syncHandler(env: MachineEnv) {
         apiDiag = apiResult.diag;
         if (apiResult.error) errors.push(apiResult.error);
         commitWatermarks = apiResult.commitWatermarks;
+        commitApiWatermarksOnCallbackSuccess = true;
       }
 
       const batches = chunk(messages, MAX_BATCH_SIZE);
@@ -188,9 +240,9 @@ export function syncHandler(env: MachineEnv) {
         }
       }
 
-      // api mode + all batches succeeded → commit watermark advances.
+      // API-emission path + all batches succeeded → commit watermark advances.
       // Per spec §4 step 6 (post-2xx ack only). Audit B2 unified finding.
-      if (env.INBOX_READER_MODE === 'api' && callbackErrors.length === 0) {
+      if (commitApiWatermarksOnCallbackSuccess && callbackErrors.length === 0) {
         commitWatermarks();
       }
 
