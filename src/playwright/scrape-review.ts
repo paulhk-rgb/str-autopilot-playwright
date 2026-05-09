@@ -40,6 +40,14 @@ const AIRBNB_URL_RE = /^https?:\/\/(?:www\.)?airbnb\.com(?::\d+)?\//i;
 const REVIEW_DETAIL_PATH_RE = /^\/progress\/reviews\/details\/[^/?#]+/i;
 const CONF_CODE_RE = /^HM[A-Z0-9-]{6,}$/i;
 const MIN_PUBLIC_REVIEW_LENGTH = 3;
+const REVIEW_TEXT_STOP_MARKERS = [
+  /\bYour public reply\b/i,
+  /\bWrite a public reply\b/i,
+  /\bEdit public reply\b/i,
+  /\bSite Footer\b/i,
+  /\bAirbnb Footer section\b/i,
+  /\{(?="props"|"page"|"query"|"buildId"|"assetPrefix")/i,
+];
 const SENTINEL_GUEST_NAMES = new Set([
   'airbnb guest',
   'airbnb user',
@@ -179,6 +187,21 @@ function missingAnchorError(opts: ScrapeReviewOptions): ScrapeReviewError {
   return new ScrapeReviewError(opts.review_url ? 'review_not_found' : 'reservation_not_found');
 }
 
+function trimReviewTextAtStopMarker(value: string): string {
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  if (!normalized) return '';
+
+  let stopIndex = normalized.length;
+  for (const marker of REVIEW_TEXT_STOP_MARKERS) {
+    const match = marker.exec(normalized);
+    if (match?.index !== undefined && match.index >= 0) {
+      stopIndex = Math.min(stopIndex, match.index);
+    }
+  }
+
+  return normalized.slice(0, stopIndex).trim();
+}
+
 export async function scrapeReviewText(
   ctx: BrowserContext,
   opts: ScrapeReviewOptions,
@@ -281,7 +304,12 @@ export async function scrapeReviewText(
           continue;
         }
         if (
+          lower === 'your public reply' ||
+          lower.startsWith('your public reply') ||
           lower === 'write a public reply' ||
+          lower.startsWith('write a public reply') ||
+          lower.startsWith('edit public reply') ||
+          lower.startsWith('detailed feedback') ||
           lower.startsWith('detailed rating') ||
           lower.startsWith('overall rating') ||
           lower.startsWith('rating') ||
@@ -363,7 +391,7 @@ export async function scrapeReviewText(
       return result;
     });
 
-    const reviewText = extracted.reviewText.trim();
+    const reviewText = trimReviewTextAtStopMarker(extracted.reviewText);
     if (reviewText.length < MIN_PUBLIC_REVIEW_LENGTH) {
       throw new ScrapeReviewError('no_text');
     }
@@ -386,7 +414,7 @@ export async function scrapeReviewText(
       schema_version: 1,
       scraped_at: new Date().toISOString(),
       review_text: reviewText,
-      private_comment: extracted.privateComment.trim() || null,
+      private_comment: trimReviewTextAtStopMarker(extracted.privateComment) || null,
       has_public_response: extracted.hasPublicResponse,
       per_category_ratings: Object.keys(ratings).length > 0 ? ratings : null,
       source_url: page.url(),
@@ -445,5 +473,6 @@ export const __scrapeReviewTestHooks = {
   normalizeGuestIdentity,
   propertyMatches,
   reviewUrlFor,
+  trimReviewTextAtStopMarker,
   expandReviewDetailContent,
 };
