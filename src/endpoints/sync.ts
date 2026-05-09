@@ -336,8 +336,15 @@ async function runApiReaderShadowCycle(
   uiMessages: ScrapedMessage[],
 ): Promise<{
   apiSkipReason?: string;
+  inboxFailureReason?: string;
+  authEpochAborted?: boolean;
   messagesEmitted: number;
   perThread: number;
+  inboxDiagnostics?: unknown;
+  inboxHashUsed?: string;
+  threadHashUsed?: string;
+  clientVersionUsed?: string | null;
+  elapsedMs?: number;
   shadow?: {
     cycleId: string;
     uiBatchSize: number;
@@ -379,8 +386,15 @@ async function runApiReaderShadowCycle(
 
   return {
     apiSkipReason: outcome.apiSkipReason,
+    inboxFailureReason: outcome.inboxFailureReason,
+    authEpochAborted: outcome.authEpochAborted,
     messagesEmitted: outcome.totalApiMessagesEmitted,
     perThread: outcome.perThread.length,
+    inboxDiagnostics: outcome.inboxDiagnostics,
+    inboxHashUsed: outcome.inboxHashUsed,
+    threadHashUsed: outcome.threadHashUsed,
+    clientVersionUsed: outcome.clientVersionUsed,
+    elapsedMs: outcome.elapsedMs,
     shadow: outcome.shadow
       ? {
           cycleId: outcome.shadow.cycleId,

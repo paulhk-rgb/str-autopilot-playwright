@@ -104,6 +104,9 @@ export interface InboxDiagnostics {
   threadsDroppedHostMembership: number;
   inboxHashUsed: string;
   schemaFingerprintOk: boolean;
+  failureKind?: 'auth_http' | 'http_error' | 'non_json' | 'evaluate_error' | 'graphql_errors';
+  httpStatus?: number;
+  graphqlErrorCodes?: string[];
 }
 
 /**
@@ -190,6 +193,18 @@ function classifyGraphqlErrors(errors: unknown[]): InboxFailureReason {
   return 'cookie_invalid';
 }
 
+function summarizeGraphqlErrorCodes(errors: unknown[]): string[] {
+  const codes = new Set<string>();
+  for (const errUnknown of errors) {
+    if (!errUnknown || typeof errUnknown !== 'object') continue;
+    const err = errUnknown as Record<string, unknown>;
+    const ext = err.extensions as Record<string, unknown> | undefined;
+    const code = typeof ext?.code === 'string' ? ext.code : '';
+    if (code) codes.add(code);
+  }
+  return [...codes].sort();
+}
+
 /**
  * Pure validator for a `ViaductInboxData` response body. Used both at runtime
  * after `page.evaluate(fetch)` and in unit tests against committed fixtures.
@@ -223,6 +238,8 @@ export function validateInboxResponse(
   // Spec §4 failure modes require the caller to distinguish PQNF (hash recovery)
   // from auth failures (cookie_valid=false).
   if (Array.isArray(root.errors) && root.errors.length > 0) {
+    diag.failureKind = 'graphql_errors';
+    diag.graphqlErrorCodes = summarizeGraphqlErrorCodes(root.errors);
     return { ok: false, reason: classifyGraphqlErrors(root.errors), diagnostics: diag };
   }
 
@@ -414,7 +431,7 @@ export async function listInboxViaApi(
     rng: opts.randomBytes,
   });
 
-  const emptyDiag = (): InboxDiagnostics => ({
+  const emptyDiag = (extra: Partial<InboxDiagnostics> = {}): InboxDiagnostics => ({
     threadsRequested: numRequestedThreads,
     threadsReturned: 0,
     threadsDroppedUnknownPrefix: 0,
@@ -422,6 +439,7 @@ export async function listInboxViaApi(
     threadsDroppedHostMembership: 0,
     inboxHashUsed: opts.inboxHash,
     schemaFingerprintOk: false,
+    ...extra,
   });
 
   type FetchOutcome =
@@ -455,13 +473,22 @@ export async function listInboxViaApi(
       { url, headers },
     )) as FetchOutcome;
   } catch {
-    return { ok: false, reason: 'http_error', diagnostics: emptyDiag() };
+    return {
+      ok: false,
+      reason: 'http_error',
+      diagnostics: emptyDiag({ failureKind: 'evaluate_error' }),
+    };
   }
 
   switch (outcome.kind) {
     case 'auth_http':
-      return { ok: false, reason: 'cookie_invalid', diagnostics: emptyDiag() };
+      return {
+        ok: false,
+        reason: 'cookie_invalid',
+        diagnostics: emptyDiag({ failureKind: 'auth_http', httpStatus: outcome.status }),
+      };
     case 'http_error': {
+      const diagnostics = emptyDiag({ failureKind: 'http_error', httpStatus: outcome.status });
       // Spec §4 + Codex v0.3 audit: HTTP 404 may carry a PQNF errors envelope.
       // Detect and surface as persisted_query_not_found so the cycle scheduler
       // can trigger hash auto-recovery instead of treating it as transient.
@@ -470,7 +497,8 @@ export async function listInboxViaApi(
           const parsed = JSON.parse(outcome.bodyText) as Record<string, unknown>;
           const errs = parsed.errors;
           if (Array.isArray(errs) && classifyGraphqlErrors(errs) === 'persisted_query_not_found') {
-            return { ok: false, reason: 'persisted_query_not_found', diagnostics: emptyDiag() };
+            diagnostics.graphqlErrorCodes = summarizeGraphqlErrorCodes(errs);
+            return { ok: false, reason: 'persisted_query_not_found', diagnostics };
           }
         } catch {
           // Not JSON; fall through to text scan below.
@@ -479,15 +507,19 @@ export async function listInboxViaApi(
           outcome.bodyText.includes('PersistedQueryNotFound') ||
           outcome.bodyText.includes('PERSISTED_QUERY_NOT_FOUND')
         ) {
-          return { ok: false, reason: 'persisted_query_not_found', diagnostics: emptyDiag() };
+          return { ok: false, reason: 'persisted_query_not_found', diagnostics };
         }
       }
-      return { ok: false, reason: 'http_error', diagnostics: emptyDiag() };
+      return { ok: false, reason: 'http_error', diagnostics };
     }
     case 'non_json':
       // 2xx with HTML body almost always means a PerimeterX/Datadome interstitial
       // or login redirect — treat as cookie failure per spec §4 failure modes.
-      return { ok: false, reason: 'cookie_invalid', diagnostics: emptyDiag() };
+      return {
+        ok: false,
+        reason: 'cookie_invalid',
+        diagnostics: emptyDiag({ failureKind: 'non_json', httpStatus: outcome.status }),
+      };
     case 'json':
       return validateInboxResponse(
         outcome.body,

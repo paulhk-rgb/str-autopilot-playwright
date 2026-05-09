@@ -18,6 +18,7 @@ import type { Page } from 'playwright';
 import { currentAuthEpoch, isAuthEpochReady } from './auth-epoch';
 import {
   type InboxFailureReason,
+  type InboxDiagnostics,
   type InboxReaderMode,
   type ScrapedMessage,
   type ThreadDiagnostics,
@@ -89,6 +90,7 @@ export interface CycleOutcome {
     | 'inbox_failed'
     | 'auth_epoch_changed';
   inboxFailureReason?: InboxFailureReason;
+  inboxDiagnostics?: InboxDiagnostics;
   apiMessages: ScrapedMessage[];
   perThread: Array<ThreadDiagnostics>;
   totalApiMessagesEmitted: number;
@@ -181,7 +183,12 @@ export async function runApiReaderCycle(
   });
   if (!inboxResult.ok) {
     return finalize(
-      { ...baseOutcome, apiSkipReason: 'inbox_failed', inboxFailureReason: inboxResult.reason },
+      {
+        ...baseOutcome,
+        apiSkipReason: 'inbox_failed',
+        inboxFailureReason: inboxResult.reason,
+        inboxDiagnostics: inboxResult.diagnostics,
+      },
       startedAt,
     );
   }
@@ -238,6 +245,7 @@ export async function runApiReaderCycle(
             ...baseOutcome,
             inboxFailureReason: threadResult.reason,
             apiSkipReason: 'inbox_failed',
+            inboxDiagnostics: inboxResult.diagnostics,
             perThread,
           },
           startedAt,
@@ -319,6 +327,7 @@ export async function runApiReaderCycle(
       ...baseOutcome,
       ok: true,
       cycleEndAuthEpoch,
+      inboxDiagnostics: inboxResult.diagnostics,
       apiMessages: apiMessagesAccum,
       perThread,
       totalApiMessagesEmitted: apiMessagesAccum.length,
