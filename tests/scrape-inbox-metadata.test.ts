@@ -2,7 +2,89 @@ import { describe, expect, it } from 'vitest';
 
 import { __scrapeInboxTestHooks } from '../src/playwright/scrape-inbox';
 
-const { parseInboxThreadSummary } = __scrapeInboxTestHooks;
+const { isExplicitEmptyInboxText, listInboxThreads, parseInboxThreadSummary } =
+  __scrapeInboxTestHooks;
+
+type FakeElement = {
+  getAttribute: (name: string) => string | null;
+  textContent: string | null;
+  innerText?: string;
+};
+
+function makeElement(testId: string, text: string): FakeElement {
+  return {
+    getAttribute: (name: string) => (name === 'data-testid' ? testId : null),
+    textContent: text,
+    innerText: text,
+  };
+}
+
+function makeFakeInboxPage(input: {
+  rows?: Array<{ id: string; text: string }>;
+  loaderPresent?: boolean;
+  bodyText?: string;
+  sidebarText?: string;
+}) {
+  const rows = input.rows ?? [];
+  const rowElements = rows.map((row) => makeElement(`inbox_list_${row.id}`, row.text));
+  const sidebarElement =
+    input.sidebarText !== undefined
+      ? [makeElement('inbox-container-marker', input.sidebarText)]
+      : [];
+  const testIdElements = [
+    ...(input.loaderPresent ? [makeElement('inbox-list-loader', '')] : []),
+    ...sidebarElement,
+    ...rowElements,
+  ];
+  const doc = {
+    title: 'Messages • Airbnb',
+    body: { innerText: input.bodyText ?? 'Messages' },
+    querySelector: (selector: string) => {
+      if (selector === '[data-testid="inbox-list-loader"]' && input.loaderPresent) {
+        return makeElement('inbox-list-loader', '');
+      }
+      if (selector === '[data-testid="inbox-container-marker"]') {
+        return sidebarElement[0] ?? null;
+      }
+      if (selector === '[data-testid="orbital-panel-inbox"]') {
+        return sidebarElement[0] ?? null;
+      }
+      return null;
+    },
+    querySelectorAll: (selector: string) => {
+      if (selector === 'a[data-testid^="inbox_list_"]') return rowElements;
+      if (selector === '[data-testid]') return testIdElements;
+      if (selector === 'a') return rowElements;
+      return [];
+    },
+  };
+  const page = {
+    reloads: 0,
+    goto: async () => undefined,
+    reload: async () => {
+      page.reloads += 1;
+    },
+    waitForFunction: async <T, Args extends unknown[]>(fn: (...args: Args) => T, arg: Args[0]) => {
+      await page.evaluate(fn, arg);
+    },
+    waitForTimeout: async () => undefined,
+    evaluate: async <T, Args extends unknown[]>(fn: (...args: Args) => T, ...args: Args) => {
+      const prevDocument = (globalThis as unknown as { document?: unknown }).document;
+      const prevLocation = (globalThis as unknown as { location?: unknown }).location;
+      (globalThis as unknown as { document?: unknown }).document = doc;
+      (globalThis as unknown as { location?: unknown }).location = {
+        href: 'https://www.airbnb.com/hosting/messages',
+      };
+      try {
+        return fn(...args);
+      } finally {
+        (globalThis as unknown as { document?: unknown }).document = prevDocument;
+        (globalThis as unknown as { location?: unknown }).location = prevLocation;
+      }
+    },
+  };
+  return page;
+}
 
 describe('scrape-inbox sidebar metadata parser', () => {
   const now = new Date('2026-05-09T12:00:00.000Z');
@@ -27,6 +109,21 @@ describe('scrape-inbox sidebar metadata parser', () => {
       stayText: 'May 7 – 10',
       listingName: 'One Bedroom Private Unit .3 Miles from Commons',
     });
+  });
+
+  it('handles Airbnb thin spaces around the date-range dash', () => {
+    const parsed = parseInboxThreadSummary(
+      '2470285483',
+      [
+        'Stuart',
+        'Currently hosting · May 7 – 10 · One Bedroom Private Unit .3 Miles from Commons',
+      ].join('\n'),
+      now,
+    );
+
+    expect(parsed.checkIn).toBe('2026-05-07');
+    expect(parsed.checkOut).toBe('2026-05-10');
+    expect(parsed.stayText).toBe('May 7 – 10');
   });
 
   it('handles cross-month stays and strips action/status noise', () => {
@@ -104,5 +201,45 @@ describe('scrape-inbox sidebar metadata parser', () => {
     expect(parsed.stayText).toBe('Feb 31 - Mar 2');
     expect(parsed.checkIn).toBeUndefined();
     expect(parsed.checkOut).toBeUndefined();
+  });
+
+  it('recognizes only explicit empty inbox copy as a no-op', () => {
+    expect(isExplicitEmptyInboxText('No messages yet')).toBe(true);
+    expect(isExplicitEmptyInboxText("You don't have any messages yet")).toBe(true);
+    expect(isExplicitEmptyInboxText('Messages')).toBe(false);
+    expect(isExplicitEmptyInboxText("Sorry, there's nothing here")).toBe(false);
+  });
+
+  it('fails closed when Airbnb leaves the inbox sidebar unloaded', async () => {
+    const page = makeFakeInboxPage({
+      loaderPresent: true,
+      bodyText: 'Messages',
+    });
+
+    await expect(listInboxThreads(page as never, 10)).rejects.toThrow(
+      /inbox_list_unavailable/,
+    );
+    expect(page.reloads).toBe(1);
+  });
+
+  it('returns an empty list for an explicit empty inbox state', async () => {
+    const page = makeFakeInboxPage({
+      bodyText: 'Messages',
+      sidebarText: 'No messages yet',
+    });
+
+    await expect(listInboxThreads(page as never, 10)).resolves.toEqual([]);
+  });
+
+  it('does not treat message-pane empty-ish copy as an empty inbox', async () => {
+    const page = makeFakeInboxPage({
+      bodyText: 'Messages\nGuest says: I am all caught up now.',
+      loaderPresent: true,
+      sidebarText: '',
+    });
+
+    await expect(listInboxThreads(page as never, 10)).rejects.toThrow(
+      /inbox_list_unavailable/,
+    );
   });
 });
