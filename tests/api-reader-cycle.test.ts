@@ -143,6 +143,8 @@ describe('runApiReaderCycle', () => {
     expect(out.ok).toBe(false);
     expect(out.apiSkipReason).toBe('inbox_failed');
     expect(out.inboxFailureReason).toBe('cookie_invalid');
+    expect(out.inboxDiagnostics?.failureKind).toBe('graphql_errors');
+    expect(out.inboxDiagnostics?.graphqlErrorCodes).toEqual(['UNAUTHENTICATED']);
   });
 
   it('aborts mid-cycle when authEpoch changes (auth_epoch_changed)', async () => {
