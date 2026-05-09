@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { __scrapeInboxTestHooks } from '../src/playwright/scrape-inbox';
+import { __scrapeInboxTestHooks, scrapeInbox } from '../src/playwright/scrape-inbox';
 
 const {
   extractConcreteMessagesUrlFromCookieValue,
@@ -113,6 +113,7 @@ function makeFakeInboxPage(input: {
       await page.evaluate(fn, arg);
     },
     waitForTimeout: async () => undefined,
+    close: async () => undefined,
     evaluate: async <T, Args extends unknown[]>(fn: (...args: Args) => T, ...args: Args) => {
       const prevDocument = (globalThis as unknown as { document?: unknown }).document;
       const prevLocation = (globalThis as unknown as { location?: unknown }).location;
@@ -129,6 +130,40 @@ function makeFakeInboxPage(input: {
     },
   };
   return page;
+}
+
+function makeFakeThreadPage(input: {
+  threadId: string;
+  senderName: string;
+  text: string;
+  timestamp: string;
+  onWaitForSelector?: () => void;
+}) {
+  let currentUrl = `https://www.airbnb.com/hosting/messages/${input.threadId}`;
+  const group = {
+    getAttribute: (name: string) =>
+      name === 'aria-label'
+        ? `${input.senderName} sent ${input.text}. Sent ${input.timestamp}.`
+        : null,
+    querySelector: (selector: string) => (selector === 'h2' ? { textContent: 'Today' } : null),
+  };
+  const doc = {
+    querySelectorAll: (selector: string) =>
+      selector === '[data-testid="message-list"] > div[role="group"]' ? [group] : [],
+  };
+
+  return {
+    goto: async (url: string) => {
+      currentUrl = url;
+    },
+    url: () => currentUrl,
+    waitForSelector: async () => {
+      input.onWaitForSelector?.();
+    },
+    close: async () => undefined,
+    evaluate: async <T, Args extends unknown[]>(fn: (...args: Args) => T, ...args: Args) =>
+      evaluateWithDocument(doc, fn, args),
+  };
 }
 
 function evaluateWithDocument<T, Args extends unknown[]>(
@@ -528,5 +563,77 @@ describe('scrape-inbox sidebar metadata parser', () => {
     await expect(listInboxThreads(page as never, 10)).rejects.toThrow(
       /inbox_list_unavailable/,
     );
+  });
+
+  it('stops before starting another thread when the runtime budget is exhausted', async () => {
+    let nowMs = 0;
+    const inboxPage = makeFakeInboxPage({
+      rows: [
+        {
+          id: '2470285483',
+          text: 'Stuart\nCurrently hosting · May 7, 2026 – May 10, 2026 · One Bedroom',
+        },
+        {
+          id: '2503263138',
+          text: 'Olga\nCurrently hosting · May 11, 2026 – May 13, 2026 · One Bedroom',
+        },
+      ],
+    });
+    const firstThreadPage = makeFakeThreadPage({
+      threadId: '2470285483',
+      senderName: 'Stuart',
+      text: 'Thanks again',
+      timestamp: 'Today at 9:00 AM',
+      onWaitForSelector: () => {
+        nowMs = 25_000;
+      },
+    });
+    const secondThreadPage = makeFakeThreadPage({
+      threadId: '2503263138',
+      senderName: 'Olga',
+      text: 'Hello',
+      timestamp: 'Today at 10:00 AM',
+    });
+    const pages = [inboxPage, firstThreadPage, secondThreadPage];
+    const ctx = {
+      newPage: async () => {
+        const page = pages.shift();
+        if (!page) throw new Error('unexpected new page');
+        return page;
+      },
+    };
+
+    const result = await scrapeInbox(ctx as never, {
+      mode: 'incremental',
+      nowMs: () => nowMs,
+    });
+
+    expect(result.messages).toHaveLength(1);
+    expect(result.messages[0].conversation_airbnb_id).toBe('2470285483');
+    expect(result.errors.some((err) => err.startsWith('sync_time_budget_exhausted'))).toBe(true);
+    expect(pages).toHaveLength(1);
+  });
+
+  it('reports budget exhaustion before inbox navigation when there is no runtime left', async () => {
+    const page = makeFakeInboxPage({
+      rows: [
+        {
+          id: '2470285483',
+          text: 'Stuart\nCurrently hosting · May 7, 2026 – May 10, 2026 · One Bedroom',
+        },
+      ],
+    });
+    const ctx = { newPage: async () => page };
+
+    const result = await scrapeInbox(ctx as never, {
+      mode: 'incremental',
+      timeBudgetMs: 0,
+      nowMs: () => 0,
+    });
+
+    expect(result.messages).toEqual([]);
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]).toContain('sync_time_budget_exhausted');
+    expect(page.gotos).toEqual([]);
   });
 });
