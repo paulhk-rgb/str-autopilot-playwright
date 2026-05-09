@@ -381,7 +381,10 @@ describe('syncHandler single-flight and budget semantics', () => {
     );
   });
 
-  it('does not API-fallback when the UI scraper already emitted messages', async () => {
+  it('uses API fallback for incremental partial UI budget exhaustion without dropping UI-only rows', async () => {
+    vi.mocked(browserModule.getBrowserContext).mockResolvedValueOnce({
+      pages: () => [{}],
+    } as never);
     vi.mocked(scraperModule.scrapeInbox).mockResolvedValueOnce({
       messages: [
         {
@@ -399,6 +402,88 @@ describe('syncHandler single-flight and budget semantics', () => {
         'sync_time_budget_exhausted:mode=incremental:phase=thread_loop:threads_read=1:threads_total=10:elapsed_ms=40000',
       ],
     });
+    vi.mocked(apiCycleModule.runApiReaderCycle).mockResolvedValueOnce({
+      cycleId: 'cycle-api-fallback-partial-budget',
+      cycleStartAuthEpoch: 1,
+      cycleEndAuthEpoch: 1,
+      authEpochAborted: false,
+      mode: 'api',
+      ok: true,
+      apiMessages: [
+        {
+          airbnb_message_id: 'airbnb-102',
+          content: 'api recovered',
+          sender: 'guest',
+          timestamp: '2026-05-09T12:05:00.000Z',
+          conversation_airbnb_id: 'thread-1',
+          guest_name: 'Guest',
+          listing_name: 'Listing',
+        },
+      ],
+      perThread: [],
+      totalApiMessagesEmitted: 1,
+      watermarkAdvancesApplied: { 'thread-1': 1778328300000 },
+      inboxHashUsed: 'h1',
+      threadHashUsed: 'h2',
+      clientVersionUsed: 'client',
+      elapsedMs: 25,
+    });
+
+    const envWithApi: MachineEnv = {
+      ...env,
+      AIRBNB_API_USER_ID: '50758264',
+      AIRBNB_API_GLOBAL_USER_ID: 'Vmlld2VyOjUwNzU4MjY0',
+    };
+
+    const { req, res, statusSpy, jsonSpy } = buildReqRes({ host_id: HOST_ID, mode: 'incremental' });
+    await syncHandler(envWithApi)(req, res);
+
+    expect(statusSpy).toHaveBeenCalledWith(200);
+    expect(apiCycleModule.runApiReaderCycle).toHaveBeenCalledTimes(1);
+    expect(callbackModule.postCallback).toHaveBeenCalledTimes(1);
+    expect(callbackModule.postCallback).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: expect.objectContaining({
+          payload: expect.objectContaining({
+            messages: [
+              expect.objectContaining({ airbnb_message_id: 'airbnb-102' }),
+              expect.objectContaining({ airbnb_message_id: 'ui-1' }),
+            ],
+          }),
+        }),
+      }),
+    );
+    expect(watermarkMocks.save).toHaveBeenCalledWith({ 'thread-1': 1778328300000 });
+    expect(jsonSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages_found: 2,
+        errors: [],
+        apiDiag: expect.objectContaining({
+          fallback: 'ui_partial_budget_recovery',
+          uiMessageCount: 1,
+          apiMessagesEmitted: 1,
+          messagesEmitted: 2,
+        }),
+      }),
+    );
+  });
+
+  it('does not API-fallback when the UI scraper emitted messages without a recoverable error', async () => {
+    vi.mocked(scraperModule.scrapeInbox).mockResolvedValueOnce({
+      messages: [
+        {
+          airbnb_message_id: 'ui-2',
+          content: 'already captured',
+          sender: 'guest',
+          timestamp: '2026-05-09T12:00:00.000Z',
+          conversation_airbnb_id: 'thread-1',
+          guest_name: 'Guest',
+          listing_name: 'Listing',
+        },
+      ],
+      bookingsFound: 0,
+      errors: [],
+    });
 
     const envWithApi: MachineEnv = {
       ...env,
@@ -411,12 +496,11 @@ describe('syncHandler single-flight and budget semantics', () => {
 
     expect(statusSpy).toHaveBeenCalledWith(200);
     expect(apiCycleModule.runApiReaderCycle).not.toHaveBeenCalled();
-    expect(callbackModule.postCallback).toHaveBeenCalledTimes(1);
     expect(callbackModule.postCallback).toHaveBeenCalledWith(
       expect.objectContaining({
         body: expect.objectContaining({
           payload: expect.objectContaining({
-            messages: [expect.objectContaining({ airbnb_message_id: 'ui-1' })],
+            messages: [expect.objectContaining({ airbnb_message_id: 'ui-2' })],
           }),
         }),
       }),

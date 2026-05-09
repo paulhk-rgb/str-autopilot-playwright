@@ -73,12 +73,21 @@ function canRunApiReader(env: MachineEnv): boolean {
   return Boolean(env.AIRBNB_API_USER_ID && env.AIRBNB_API_GLOBAL_USER_ID);
 }
 
-function shouldRecoverZeroMessageUiReadWithApi(
+function hasIncrementalBudgetExhaustion(mode: SyncBody['mode'], errors: string[]): boolean {
+  return (
+    mode === 'incremental' &&
+    errors.some((err) => String(err).startsWith('sync_time_budget_exhausted'))
+  );
+}
+
+function shouldRecoverUiReadWithApi(
   mode: SyncBody['mode'],
   messages: ScrapedMessage[],
   errors: string[],
 ): boolean {
-  if (messages.length > 0) return false;
+  if (messages.length > 0) {
+    return hasIncrementalBudgetExhaustion(mode, errors);
+  }
   if (
     mode !== 'incremental' &&
     errors.some((err) => String(err).startsWith('sync_time_budget_exhausted'))
@@ -93,6 +102,17 @@ function shouldRecoverZeroMessageUiReadWithApi(
       text.startsWith('inbox_list_failed: inbox_list_unavailable')
     );
   });
+}
+
+function mergeApiThenUiMessages(apiMessages: ScrapedMessage[], uiMessages: ScrapedMessage[]): ScrapedMessage[] {
+  const seen = new Set<string>();
+  const merged: ScrapedMessage[] = [];
+  for (const message of [...apiMessages, ...uiMessages]) {
+    if (seen.has(message.airbnb_message_id)) continue;
+    seen.add(message.airbnb_message_id);
+    merged.push(message);
+  }
+  return merged;
 }
 
 export function syncHandler(env: MachineEnv) {
@@ -156,15 +176,24 @@ export function syncHandler(env: MachineEnv) {
         bookingsFound = uiResult.bookingsFound;
         const uiErrors = uiResult.errors;
         if (
-          shouldRecoverZeroMessageUiReadWithApi(req.body.mode, messages, uiErrors) &&
+          shouldRecoverUiReadWithApi(req.body.mode, messages, uiErrors) &&
           canRunApiReader(env)
         ) {
+          const fallbackReason =
+            uiResult.messages.length === 0
+              ? 'ui_zero_message_recovery'
+              : 'ui_partial_budget_recovery';
           const apiResult = await runApiReaderEmissionCycle(ctx, env);
+          const recoveredMessages =
+            uiResult.messages.length === 0
+              ? apiResult.messages
+              : mergeApiThenUiMessages(apiResult.messages, uiResult.messages);
           apiDiag = {
-            fallback: 'ui_zero_message_recovery',
+            fallback: fallbackReason,
             uiMessageCount: uiResult.messages.length,
             uiErrors: uiErrors.slice(0, 10),
-            messagesEmitted: apiResult.messages.length,
+            apiMessagesEmitted: apiResult.messages.length,
+            messagesEmitted: recoveredMessages.length,
             error: apiResult.error,
             result: apiResult.diag,
           };
@@ -172,7 +201,7 @@ export function syncHandler(env: MachineEnv) {
             errors.push(...uiErrors);
             errors.push(`api_fallback_failed: ${apiResult.error}`);
           } else {
-            messages = apiResult.messages;
+            messages = recoveredMessages;
             commitWatermarks = apiResult.commitWatermarks;
             commitApiWatermarksOnCallbackSuccess = true;
           }
