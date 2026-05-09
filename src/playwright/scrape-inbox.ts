@@ -110,6 +110,7 @@ const MONTH_PATTERN =
 const EMPTY_INBOX_TEXT_PATTERN_SOURCE =
   "\\b(no messages|no conversations|all caught up|don['’]t have any messages|do not have any messages|you have no messages)\\b";
 const EMPTY_INBOX_TEXT_PATTERN = new RegExp(EMPTY_INBOX_TEXT_PATTERN_SOURCE, 'i');
+const AIRBNB_MESSAGES_URL = 'https://www.airbnb.com/hosting/messages';
 
 function normalizeSidebarText(text: string): string {
   return text
@@ -314,6 +315,7 @@ async function collectInboxDiag(page: Page): Promise<InboxPageDiag> {
     }
     const inboxPanelText =
       doc.querySelector('[data-testid="inbox-container-marker"]')?.textContent || '';
+    const messageListPresent = Boolean(doc.querySelector('[data-testid="message-list"]'));
     const emptyPattern = new RegExp(emptyInboxTextPatternSource, 'i');
     return {
       url: w.href,
@@ -322,7 +324,7 @@ async function collectInboxDiag(page: Page): Promise<InboxPageDiag> {
       anyAnchors: doc.querySelectorAll('a').length,
       anyDataTestIds: testIdEls.length,
       loaderPresent: Boolean(doc.querySelector('[data-testid="inbox-list-loader"]')),
-      emptyStateVisible: emptyPattern.test(inboxPanelText),
+      emptyStateVisible: !messageListPresent && emptyPattern.test(inboxPanelText),
       sampleTestIds: testIds,
       bodyText: (doc.body?.innerText || '').slice(0, 800),
     };
@@ -359,6 +361,7 @@ async function waitForInboxRowsOrEmpty(page: Page, timeoutMs: number): Promise<v
         };
         const doc = (globalThis as unknown as { document: WaitDoc }).document;
         if (doc.querySelectorAll('a[data-testid^="inbox_list_"]').length > 0) return true;
+        if (doc.querySelector('[data-testid="message-list"]')) return false;
         const inboxPanelText =
           doc.querySelector('[data-testid="inbox-container-marker"]')?.textContent || '';
         return new RegExp(emptyInboxTextPatternSource, 'i').test(inboxPanelText);
@@ -375,31 +378,97 @@ function logInboxDiag(diag: InboxPageDiag): void {
   (globalThis as unknown as { __lastInboxDiag?: unknown }).__lastInboxDiag = diag;
 }
 
-async function gotoInbox(page: Page): Promise<void> {
+function extractConcreteMessagesUrlFromCookieValue(rawValue: string | undefined): string | null {
+  if (!rawValue) return null;
+
+  let decoded: string;
   try {
-    await page.goto('https://www.airbnb.com/hosting/messages', {
+    decoded = decodeURIComponent(rawValue);
+  } catch {
+    return null;
+  }
+
+  let url: URL;
+  try {
+    url = new URL(decoded, 'https://www.airbnb.com');
+  } catch {
+    return null;
+  }
+
+  if (url.origin !== 'https://www.airbnb.com') return null;
+
+  const match = url.pathname.match(/^\/hosting\/messages\/(\d+)$/);
+  if (!match) return null;
+
+  // Rebuild from the validated numeric thread id so query strings, hashes, and
+  // filtered inbox views never leak into the fallback navigation.
+  return `${AIRBNB_MESSAGES_URL}/${match[1]}`;
+}
+
+async function readLastKnownMessagesUrl(page: Page): Promise<string | null> {
+  try {
+    const cookies = await page.context().cookies('https://www.airbnb.com');
+    for (let i = cookies.length - 1; i >= 0; i--) {
+      const cookie = cookies[i];
+      if (cookie.name !== '__ps_lu') continue;
+      const fallbackUrl = extractConcreteMessagesUrlFromCookieValue(cookie.value);
+      if (fallbackUrl) return fallbackUrl;
+    }
+  } catch (err) {
+    console.warn('[scrape-inbox] failed to read last-known inbox url cookie', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  return null;
+}
+
+async function gotoInbox(page: Page, url = AIRBNB_MESSAGES_URL): Promise<void> {
+  try {
+    await page.goto(url, {
       waitUntil: 'domcontentloaded',
       timeout: 30_000,
     });
   } catch (err) {
     const currentUrl = page.url();
-    if (!/\/hosting\/messages(?:\/|$|\?)/.test(currentUrl)) {
+    const errorText = err instanceof Error ? err.message : String(err);
+    const isTimeout = /Timeout \d+ms exceeded|TimeoutError/i.test(errorText);
+    if (!isTimeout || !/\/hosting\/messages(?:\/|$|\?)/.test(currentUrl)) {
       throw err;
     }
     console.warn('[scrape-inbox] inbox navigation timed out after reaching messages page', {
       url: currentUrl,
-      error: err instanceof Error ? err.message : String(err),
+      error: errorText,
     });
   }
 }
 
 async function listInboxThreads(page: Page, max: number): Promise<InboxThreadSummary[]> {
   let lastDiag: InboxPageDiag | null = null;
+  const fallbackUrl = await readLastKnownMessagesUrl(page);
+  const attemptedStrategies: string[] = [];
 
   for (let attempt = 1; attempt <= 2; attempt++) {
     if (attempt === 1) {
+      attemptedStrategies.push('bare');
       await gotoInbox(page);
+    } else if (
+      fallbackUrl &&
+      lastDiag &&
+      !lastDiag.emptyStateVisible &&
+      lastDiag.inboxLinks === 0 &&
+      lastDiag.url !== fallbackUrl
+    ) {
+      attemptedStrategies.push('fallback-cookie');
+      console.warn('[scrape-inbox] retrying inbox list at last known thread url', {
+        prior_url: lastDiag.url,
+        prior_loader_present: lastDiag.loaderPresent,
+        prior_inbox_links: lastDiag.inboxLinks,
+        fallback_path: new URL(fallbackUrl).pathname,
+      });
+      await gotoInbox(page, fallbackUrl);
     } else {
+      attemptedStrategies.push('reload');
       console.warn('[scrape-inbox] retrying inbox list after unloaded sidebar', {
         prior_url: lastDiag?.url,
         prior_loader_present: lastDiag?.loaderPresent,
@@ -420,7 +489,7 @@ async function listInboxThreads(page: Page, max: number): Promise<InboxThreadSum
     // Wait for actual rows or an explicit empty state; loader disappearance
     // alone is not enough because we observed production returning a bare
     // shell (`Messages` + loader) that would otherwise be mistaken for success.
-    await waitForInboxRowsOrEmpty(page, attempt === 1 ? 45_000 : 15_000);
+    await waitForInboxRowsOrEmpty(page, attempt === 1 ? 45_000 : 20_000);
     await page.waitForTimeout(1500);
 
     lastDiag = await collectInboxDiag(page);
@@ -462,6 +531,7 @@ async function listInboxThreads(page: Page, max: number): Promise<InboxThreadSum
       diag ? `links=${diag.inboxLinks}` : null,
       diag ? `anchors=${diag.anyAnchors}` : null,
       diag ? `testids=${diag.anyDataTestIds}` : null,
+      `attempts=${attemptedStrategies.join(',')}`,
     ]
       .filter(Boolean)
       .join(':'),
@@ -641,6 +711,7 @@ export async function scrapeInbox(
 }
 
 export const __scrapeInboxTestHooks = {
+  extractConcreteMessagesUrlFromCookieValue,
   parseInboxThreadSummary,
   isExplicitEmptyInboxText,
   listInboxThreads,
