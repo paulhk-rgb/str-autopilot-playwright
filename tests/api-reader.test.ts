@@ -9,6 +9,7 @@ import {
   decodeRelayId,
   extractText,
   generateTraceId,
+  listInboxViaApi,
   readThreadViaApi,
   validateInboxResponse,
   validateThreadResponse,
@@ -208,6 +209,41 @@ describe('validateInboxResponse', () => {
     expect(result.diagnostics.threadsDroppedUnknownPrefix).toBe(0);
     expect(result.diagnostics.threadsDroppedHostMembership).toBe(0);
     expect(result.diagnostics.schemaFingerprintOk).toBe(true);
+  });
+
+  it('listInboxViaApi prefers the context request client over page.evaluate', async () => {
+    let requestCalls = 0;
+    const page = {
+      context: () => ({
+        request: {
+          get: async () => {
+            requestCalls += 1;
+            return {
+              status: () => 200,
+              text: async () => JSON.stringify(inboxFixture),
+            };
+          },
+        },
+      }),
+      evaluate: async () => {
+        throw new Error('page.evaluate should not be used when context.request is available');
+      },
+    };
+
+    const result = await listInboxViaApi(page as never, {
+      mode: 'shadow',
+      hostNumericId: HOST,
+      globalUserId: Buffer.from(`Viewer:${HOST}`).toString('base64'),
+      inboxHash: 'fakehash',
+      threadHash: 'threadhash',
+      apiKey: 'k',
+      clientVersion: 'v',
+    });
+
+    expect(requestCalls).toBe(1);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('unreachable');
+    expect(result.threads.length).toBe(15);
   });
 
   it('extracts globalThreadId from response (never constructs from rawId)', () => {
