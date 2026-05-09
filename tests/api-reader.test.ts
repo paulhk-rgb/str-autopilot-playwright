@@ -697,6 +697,105 @@ describe('validateThreadResponse', () => {
     }
   });
 
+  it('emits the single non-host guest participant name for callback hydration', () => {
+    const cloned = JSON.parse(JSON.stringify(threadFixture));
+    const td = (cloned.data as Record<string, unknown>).threadData as Record<string, unknown>;
+    const participants = td.participants as Record<string, unknown>;
+    const partEdges = participants.edges as Array<Record<string, unknown>>;
+    for (const edge of partEdges) {
+      const node = edge.node as Record<string, unknown>;
+      const enriched = node.enrichedParticipantInfo as Record<string, unknown>;
+      if (node.accountId === HOST) {
+        node.participantRole = 'HOST';
+        enriched.name = 'Host Person';
+      } else {
+        node.participantRole = 'GUEST';
+        enriched.name = 'Guest Person';
+      }
+    }
+
+    const result = validateThreadResponse(
+      cloned,
+      expectedRawId,
+      HOST,
+      expectedGlobalId,
+      'fakehash',
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('unreachable');
+    expect(result.messages.length).toBeGreaterThan(0);
+    expect(new Set(result.messages.map(m => m.guest_name))).toEqual(new Set(['Guest Person']));
+  });
+
+  it('prefers the booker name when a thread has additional guest participants', () => {
+    const cloned = JSON.parse(JSON.stringify(threadFixture));
+    const td = (cloned.data as Record<string, unknown>).threadData as Record<string, unknown>;
+    const participants = td.participants as Record<string, unknown>;
+    const partEdges = participants.edges as Array<Record<string, unknown>>;
+    for (const edge of partEdges) {
+      const node = edge.node as Record<string, unknown>;
+      const enriched = node.enrichedParticipantInfo as Record<string, unknown>;
+      if (node.accountId === HOST) {
+        node.participantRole = 'HOST';
+        node.productRole = 'PRIMARY_HOST';
+        enriched.name = 'Host Person';
+      } else {
+        node.participantRole = 'GUEST';
+        node.productRole = 'BOOKER';
+        enriched.name = 'Guest Booker';
+      }
+    }
+    partEdges.push({
+      node: {
+        accountId: '888000111',
+        participantRole: 'GUEST',
+        productRole: 'GUEST',
+        enrichedParticipantInfo: { name: 'Travel Companion' },
+      },
+    });
+
+    const result = validateThreadResponse(
+      cloned,
+      expectedRawId,
+      HOST,
+      expectedGlobalId,
+      'fakehash',
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('unreachable');
+    expect(new Set(result.messages.map(m => m.guest_name))).toEqual(new Set(['Guest Booker']));
+  });
+
+  it('does not treat a numeric host accountId as a guest candidate', () => {
+    const cloned = JSON.parse(JSON.stringify(threadFixture));
+    const td = (cloned.data as Record<string, unknown>).threadData as Record<string, unknown>;
+    const participants = td.participants as Record<string, unknown>;
+    const partEdges = participants.edges as Array<Record<string, unknown>>;
+    for (const edge of partEdges) {
+      const node = edge.node as Record<string, unknown>;
+      const enriched = node.enrichedParticipantInfo as Record<string, unknown>;
+      if (node.accountId === HOST) {
+        node.accountId = Number(HOST);
+        node.participantRole = 'HOST';
+        enriched.name = 'Host Person';
+      } else {
+        node.participantRole = 'GUEST';
+        enriched.name = 'Guest Person';
+      }
+    }
+
+    const result = validateThreadResponse(
+      cloned,
+      expectedRawId,
+      HOST,
+      expectedGlobalId,
+      'fakehash',
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('unreachable');
+    expect(new Set(result.messages.map(m => m.guest_name))).toEqual(new Set(['Guest Person']));
+  });
+
   it('counts contentTypes in diagnostics for mixed-content fixture', () => {
     const result = validateThreadResponse(
       threadFixture,

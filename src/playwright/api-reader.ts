@@ -205,6 +205,105 @@ function summarizeGraphqlErrorCodes(errors: unknown[]): string[] {
   return [...codes].sort();
 }
 
+function cleanText(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.replace(/\s+/g, ' ').trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function cleanId(value: unknown): string {
+  if (typeof value === 'string' || typeof value === 'number') {
+    return String(value).trim();
+  }
+  return '';
+}
+
+function preferredParticipantName(node: Record<string, unknown>): string | undefined {
+  const enriched = node.enrichedParticipantInfo as Record<string, unknown> | undefined;
+  return (
+    cleanText(enriched?.name) ??
+    cleanText(enriched?.threadDisplayName) ??
+    cleanText(node.name) ??
+    cleanText(node.displayName) ??
+    cleanText(node.fullName)
+  );
+}
+
+function participantRoleInfo(node: Record<string, unknown>): {
+  participantRole: string;
+  roleDescription: string;
+  productRole: string;
+} {
+  return {
+    participantRole: cleanText(node.participantRole)?.toUpperCase() ?? '',
+    roleDescription: cleanText(node.roleDescription)?.toUpperCase() ?? '',
+    productRole: cleanText(node.productRole)?.toUpperCase() ?? '',
+  };
+}
+
+function isHostParticipant(node: Record<string, unknown>, hostNumericId: string): boolean {
+  const accountId = cleanId(node.accountId);
+  if (accountId && accountId === hostNumericId) return true;
+  const { participantRole, roleDescription, productRole } = participantRoleInfo(node);
+  return (
+    participantRole === 'HOST' ||
+    participantRole === 'CO_HOST' ||
+    roleDescription === 'HOST' ||
+    roleDescription === 'CO-HOST' ||
+    productRole === 'PRIMARY_HOST' ||
+    productRole === 'CO_HOST'
+  );
+}
+
+function guestCandidateRank(node: Record<string, unknown>): number | null {
+  const { participantRole, roleDescription, productRole } = participantRoleInfo(node);
+  if (
+    participantRole === 'BOOKER' ||
+    roleDescription === 'BOOKER' ||
+    productRole === 'BOOKER'
+  ) {
+    return 0;
+  }
+  if (
+    participantRole === 'GUEST' ||
+    roleDescription === 'GUEST' ||
+    productRole === 'GUEST'
+  ) {
+    return 1;
+  }
+  return null;
+}
+
+function extractThreadGuestName(
+  threadData: Record<string, unknown>,
+  hostNumericId: string,
+): string | undefined {
+  const participants = threadData.participants as Record<string, unknown> | undefined;
+  const partEdges = participants?.edges;
+  if (!Array.isArray(partEdges)) return undefined;
+
+  const candidates = new Map<string, { name: string; rank: number }>();
+  for (const peUnknown of partEdges) {
+    const pe = peUnknown as Record<string, unknown> | null;
+    const node = pe?.node as Record<string, unknown> | undefined;
+    if (!node || isHostParticipant(node, hostNumericId)) continue;
+    const rank = guestCandidateRank(node);
+    if (rank === null) continue;
+    const name = preferredParticipantName(node);
+    if (!name) continue;
+    const key = cleanId(node.accountId) || name.toLowerCase();
+    const existing = candidates.get(key);
+    if (!existing || rank < existing.rank) candidates.set(key, { name, rank });
+  }
+
+  const byRank = [...candidates.values()].sort((a, b) => a.rank - b.rank);
+  const bookerNames = new Set(byRank.filter((c) => c.rank === 0).map((c) => c.name));
+  if (bookerNames.size === 1) return [...bookerNames][0];
+
+  const allNames = new Set(byRank.map((c) => c.name));
+  return allNames.size === 1 ? [...allNames][0] : undefined;
+}
+
 /**
  * Pure validator for a `ViaductInboxData` response body. Used both at runtime
  * after `page.evaluate(fetch)` and in unit tests against committed fixtures.
@@ -296,8 +395,8 @@ export function validateInboxResponse(
     for (const peUnknown of partEdgesUnknown) {
       const pe = peUnknown as Record<string, unknown> | null;
       const peNode = pe?.node as Record<string, unknown> | undefined;
-      const accountId = peNode?.accountId;
-      if (typeof accountId === 'string') {
+      const accountId = peNode ? cleanId(peNode.accountId) : '';
+      if (accountId) {
         accountIds.push(accountId);
       }
     }
@@ -596,6 +695,7 @@ export interface ScrapedMessage {
   /** ISO8601 — derived from `createdAtMs`. */
   timestamp: string;
   conversation_airbnb_id: string;
+  guest_name?: string;
 }
 
 export interface ThreadDiagnostics {
@@ -875,8 +975,9 @@ export function validateThreadResponse(
   for (const peUnknown of partEdges) {
     const pe = peUnknown as Record<string, unknown> | null;
     const peNode = pe?.node as Record<string, unknown> | undefined;
-    if (typeof peNode?.accountId === 'string') {
-      participantAccountIds.add(peNode.accountId);
+    const accountId = peNode ? cleanId(peNode.accountId) : '';
+    if (accountId) {
+      participantAccountIds.add(accountId);
     }
   }
   if (!participantAccountIds.has(hostNumericId)) {
@@ -969,7 +1070,7 @@ export function validateThreadResponse(
 
     // Schema fingerprint per-message: id, account.accountId, createdAtMs.
     const account = msg.account as Record<string, unknown> | undefined;
-    const accountId = typeof account?.accountId === 'string' ? account.accountId : null;
+    const accountId = account ? cleanId(account.accountId) : '';
     const accountType = typeof account?.accountType === 'string' ? account.accountType : '';
     const createdAtMsRaw = msg.createdAtMs;
     if (!accountId || typeof createdAtMsRaw !== 'string') {
@@ -1092,12 +1193,14 @@ export function validateThreadResponse(
   filtered.sort((a, b) => a.createdAtMs - b.createdAtMs);
 
   const conversationAirbnbId = expectedRawId;
+  const guestName = extractThreadGuestName(threadData, hostNumericId);
   const out: ScrapedMessage[] = filtered.map(c => ({
     airbnb_message_id: `airbnb-${c.msgId}`,
     content: c.extracted.text,
     sender: c.sender,
     timestamp: new Date(c.createdAtMs).toISOString(),
     conversation_airbnb_id: conversationAirbnbId,
+    guest_name: guestName,
   }));
   diag.messagesEmitted = out.length;
 
