@@ -30,6 +30,11 @@ export interface ScrapedMessage {
   sender: 'guest' | 'host';
   timestamp: string; // ISO8601 — best-effort; Airbnb's aria-label is relative ("2 days ago")
   conversation_airbnb_id: string;
+  guest_name?: string;
+  listing_name?: string;
+  check_in?: string;
+  check_out?: string;
+  stay_text?: string;
 }
 
 interface ParsedGroup {
@@ -50,6 +55,195 @@ export interface ScrapeOptions {
 interface ScrapeBudget {
   maxThreads: number;
   maxMessagesPerThread: number;
+}
+
+interface InboxThreadSummary {
+  threadId: string;
+  guestName?: string;
+  listingName?: string;
+  checkIn?: string;
+  checkOut?: string;
+  stayText?: string;
+}
+
+const MONTH_INDEX: Record<string, number> = {
+  jan: 0,
+  january: 0,
+  feb: 1,
+  february: 1,
+  mar: 2,
+  march: 2,
+  apr: 3,
+  april: 3,
+  may: 4,
+  jun: 5,
+  june: 5,
+  jul: 6,
+  july: 6,
+  aug: 7,
+  august: 7,
+  sep: 8,
+  sept: 8,
+  september: 8,
+  oct: 9,
+  october: 9,
+  nov: 10,
+  november: 10,
+  dec: 11,
+  december: 11,
+};
+
+const MONTH_PATTERN =
+  'Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?';
+
+function normalizeSidebarText(text: string): string {
+  return text
+    .replace(/\u00a0/g, ' ')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n{2,}/g, '\n')
+    .trim();
+}
+
+function isSidebarNoiseLine(line: string): boolean {
+  return (
+    /^(confirmed|currently hosting|pending|canceled|cancelled|unread|leave a review|message)$/i.test(line) ||
+    /^(inquiry|request to book|pre-approved|preapproved|declined|expired|action required)$/i.test(line) ||
+    /^\d{1,2}:\d{2}\s?(am|pm)$/i.test(line) ||
+    /^(today|yesterday|monday|tuesday|wednesday|thursday|friday|saturday|sunday)$/i.test(line) ||
+    /^you:/i.test(line) ||
+    /^airbnb update:/i.test(line)
+  );
+}
+
+function firstLikelyGuestName(raw: string): string | undefined {
+  for (const line of normalizeSidebarText(raw).split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed || isSidebarNoiseLine(trimmed)) continue;
+    if (new RegExp(`\\b(?:${MONTH_PATTERN})\\s+\\d{1,2}\\b`, 'i').test(trimmed)) continue;
+    return trimmed.slice(0, 120);
+  }
+  return undefined;
+}
+
+function monthIndex(name: string): number | undefined {
+  return MONTH_INDEX[name.toLowerCase()];
+}
+
+function isoDate(year: number, month: number, day: number): string {
+  return `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+function inferCheckInYear(month: number, day: number, now: Date): number | null {
+  const year = now.getFullYear();
+  const candidate = new Date(Date.UTC(year, month, day));
+  // Airbnb sidebar rows usually omit the year. If a parsed date would land
+  // more than roughly six months in the future, treat the year as ambiguous
+  // rather than risking a wrong-stay link to either prior-year or far-future data.
+  const maxFutureMs = 180 * 24 * 60 * 60 * 1000;
+  const delta = candidate.getTime() - now.getTime();
+  if (delta > maxFutureMs) return null;
+  if (delta < -maxFutureMs) {
+    const nextYearCandidate = new Date(Date.UTC(year + 1, month, day));
+    if (nextYearCandidate.getTime() - now.getTime() <= maxFutureMs) {
+      return year + 1;
+    }
+    return null;
+  }
+  return year;
+}
+
+function isValidDateParts(year: number, month: number, day: number): boolean {
+  const dt = new Date(Date.UTC(year, month, day));
+  return (
+    dt.getUTCFullYear() === year &&
+    dt.getUTCMonth() === month &&
+    dt.getUTCDate() === day
+  );
+}
+
+function likelyListingFromTail(tail: string): string | undefined {
+  const parts = tail
+    .split(/[·•\n]/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+
+  for (const part of parts) {
+    if (isSidebarNoiseLine(part)) continue;
+    if (/^\d+\s+(adult|adults|guest|guests|infant|infants|night|nights)\b/i.test(part)) continue;
+    if (/^(inbox|read|sent|booker)$/i.test(part)) continue;
+    if (/^\d{1,2}:\d{2}\s?(am|pm)$/i.test(part)) continue;
+    return part.slice(0, 200);
+  }
+
+  return undefined;
+}
+
+function parseInboxThreadSummary(
+  threadId: string,
+  rawText: string,
+  now: Date = new Date(),
+): InboxThreadSummary {
+  const raw = normalizeSidebarText(rawText);
+  const summary: InboxThreadSummary = {
+    threadId,
+    guestName: firstLikelyGuestName(raw),
+  };
+
+  const datePattern = new RegExp(
+    `\\b(${MONTH_PATTERN})\\s+(\\d{1,2})(?:,?\\s*(\\d{4}))?\\s*(?:-|–|—|to)\\s*(?:(${MONTH_PATTERN})\\s+)?(\\d{1,2})(?:,?\\s*(\\d{4}))?`,
+    'i',
+  );
+  const match = raw.match(datePattern);
+  if (!match || match.index === undefined) return summary;
+
+  const startMonth = monthIndex(match[1]);
+  const startDay = Number(match[2]);
+  const startYearExplicit = match[3] ? Number(match[3]) : undefined;
+  const endMonth = monthIndex(match[4] || match[1]);
+  const endDay = Number(match[5]);
+  const endYearExplicit = match[6] ? Number(match[6]) : undefined;
+  if (startMonth === undefined || endMonth === undefined || !startDay || !endDay) {
+    return summary;
+  }
+
+  summary.stayText = match[0].replace(/\s+/g, ' ').trim();
+  summary.listingName = likelyListingFromTail(raw.slice(match.index + match[0].length));
+
+  let checkInYear: number | null;
+  let checkOutYear: number;
+  if (startYearExplicit && endYearExplicit) {
+    checkInYear = startYearExplicit;
+    checkOutYear = endYearExplicit;
+  } else if (endYearExplicit) {
+    checkOutYear = endYearExplicit;
+    checkInYear = endMonth < startMonth ? endYearExplicit - 1 : endYearExplicit;
+  } else if (startYearExplicit) {
+    checkInYear = startYearExplicit;
+    checkOutYear = startYearExplicit;
+  } else {
+    checkInYear = inferCheckInYear(startMonth, startDay, now);
+    if (checkInYear === null) return summary;
+    checkOutYear = checkInYear;
+  }
+
+  if (
+    !endYearExplicit &&
+    (endMonth < startMonth || (endMonth === startMonth && endDay < startDay))
+  ) {
+    checkOutYear += 1;
+  }
+
+  if (
+    !isValidDateParts(checkInYear, startMonth, startDay) ||
+    !isValidDateParts(checkOutYear, endMonth, endDay)
+  ) {
+    return summary;
+  }
+
+  summary.checkIn = isoDate(checkInYear, startMonth, startDay);
+  summary.checkOut = isoDate(checkOutYear, endMonth, endDay);
+
+  return summary;
 }
 
 function budgetFor(mode: ScrapeOptions['mode']): ScrapeBudget {
@@ -81,7 +275,7 @@ function stableMessageId(
   return h.digest('hex').slice(0, 32);
 }
 
-async function listInboxThreadIds(page: Page, max: number): Promise<string[]> {
+async function listInboxThreads(page: Page, max: number): Promise<InboxThreadSummary[]> {
   await page.goto('https://www.airbnb.com/hosting/messages', {
     waitUntil: 'domcontentloaded',
     timeout: 30_000,
@@ -135,26 +329,31 @@ async function listInboxThreadIds(page: Page, max: number): Promise<string[]> {
   // Echo into a side-channel global so the handler can include in response.
   (globalThis as unknown as { __lastInboxDiag?: unknown }).__lastInboxDiag = diag;
 
-  const ids = await page.evaluate(() => {
-    type EL = { getAttribute(n: string): string | null };
+  const threads = await page.evaluate(() => {
+    type EL = {
+      getAttribute(n: string): string | null;
+      textContent: string | null;
+      innerText?: string;
+    };
     type Doc = { querySelectorAll(sel: string): { forEach(cb: (el: EL) => void): void } };
     const doc = (globalThis as unknown as { document: Doc }).document;
-    const out: string[] = [];
+    const out: Array<{ id: string; text: string }> = [];
     doc.querySelectorAll('a[data-testid^="inbox_list_"]').forEach((el) => {
       const t = el.getAttribute('data-testid') || '';
       const id = t.replace('inbox_list_', '');
-      if (id) out.push(id);
+      if (id) out.push({ id, text: el.innerText || el.textContent || '' });
     });
     return out;
   });
 
   // Dedup while preserving order; cap to budget.
   const seen = new Set<string>();
-  const unique: string[] = [];
-  for (const id of ids) {
+  const unique: InboxThreadSummary[] = [];
+  for (const thread of threads) {
+    const id = thread.id;
     if (seen.has(id)) continue;
     seen.add(id);
-    unique.push(id);
+    unique.push(parseInboxThreadSummary(id, thread.text));
     if (unique.length >= max) break;
   }
   return unique;
@@ -289,15 +488,16 @@ export async function scrapeInbox(
 
   const page = await ctx.newPage();
   try {
-    let threadIds: string[] = [];
+    let threads: InboxThreadSummary[] = [];
     try {
-      threadIds = await listInboxThreadIds(page, budget.maxThreads);
+      threads = await listInboxThreads(page, budget.maxThreads);
     } catch (err) {
       errors.push(`inbox_list_failed: ${err instanceof Error ? err.message : String(err)}`);
       return { messages: out, bookingsFound: 0, errors };
     }
 
-    for (const threadId of threadIds) {
+    for (const thread of threads) {
+      const threadId = thread.threadId;
       try {
         const groups = await readThread(page, threadId, budget.maxMessagesPerThread);
         for (const g of groups) {
@@ -311,6 +511,11 @@ export async function scrapeInbox(
             sender,
             timestamp: ts,
             conversation_airbnb_id: threadId,
+            guest_name: thread.guestName,
+            listing_name: thread.listingName,
+            check_in: thread.checkIn,
+            check_out: thread.checkOut,
+            stay_text: thread.stayText,
           });
         }
       } catch (err) {
@@ -325,3 +530,7 @@ export async function scrapeInbox(
 
   return { messages: out, bookingsFound: 0, errors };
 }
+
+export const __scrapeInboxTestHooks = {
+  parseInboxThreadSummary,
+};
