@@ -2,13 +2,26 @@ import { describe, expect, it } from 'vitest';
 
 import { __scrapeInboxTestHooks } from '../src/playwright/scrape-inbox';
 
-const { isExplicitEmptyInboxText, listInboxThreads, parseInboxThreadSummary } =
+const {
+  extractConcreteMessagesUrlFromCookieValue,
+  isExplicitEmptyInboxText,
+  listInboxThreads,
+  parseInboxThreadSummary,
+} =
   __scrapeInboxTestHooks;
 
 type FakeElement = {
   getAttribute: (name: string) => string | null;
   textContent: string | null;
   innerText?: string;
+};
+
+type FakePageState = {
+  rows?: Array<{ id: string; text: string }>;
+  loaderPresent?: boolean;
+  messageListPresent?: boolean;
+  bodyText?: string;
+  sidebarText?: string;
 };
 
 function makeElement(testId: string, text: string): FakeElement {
@@ -24,48 +37,73 @@ function makeFakeInboxPage(input: {
   loaderPresent?: boolean;
   bodyText?: string;
   sidebarText?: string;
+  cookies?: Array<{ name: string; value: string }>;
+  statesByUrl?: Record<string, FakePageState>;
   gotoError?: Error;
   url?: string;
 }) {
-  const rows = input.rows ?? [];
-  const rowElements = rows.map((row) => makeElement(`inbox_list_${row.id}`, row.text));
-  const sidebarElement =
-    input.sidebarText !== undefined
-      ? [makeElement('inbox-container-marker', input.sidebarText)]
+  let currentUrl = input.url ?? 'https://www.airbnb.com/hosting/messages';
+  const gotos: string[] = [];
+
+  const currentState = (): FakePageState => {
+    return input.statesByUrl?.[currentUrl] ?? input;
+  };
+
+  const rowElements = (): FakeElement[] =>
+    (currentState().rows ?? []).map((row) => makeElement(`inbox_list_${row.id}`, row.text));
+
+  const sidebarElement = (): FakeElement[] =>
+    currentState().sidebarText !== undefined
+      ? [makeElement('inbox-container-marker', currentState().sidebarText ?? '')]
       : [];
-  const testIdElements = [
-    ...(input.loaderPresent ? [makeElement('inbox-list-loader', '')] : []),
-    ...sidebarElement,
-    ...rowElements,
+
+  const testIdElements = (): FakeElement[] => [
+    ...(currentState().loaderPresent ? [makeElement('inbox-list-loader', '')] : []),
+    ...sidebarElement(),
+    ...rowElements(),
   ];
+
   const doc = {
     title: 'Messages • Airbnb',
-    body: { innerText: input.bodyText ?? 'Messages' },
+    body: {
+      get innerText() {
+        return currentState().bodyText ?? 'Messages';
+      },
+    },
     querySelector: (selector: string) => {
-      if (selector === '[data-testid="inbox-list-loader"]' && input.loaderPresent) {
+      if (selector === '[data-testid="inbox-list-loader"]' && currentState().loaderPresent) {
         return makeElement('inbox-list-loader', '');
       }
+      if (selector === '[data-testid="message-list"]' && currentState().messageListPresent) {
+        return makeElement('message-list', '');
+      }
       if (selector === '[data-testid="inbox-container-marker"]') {
-        return sidebarElement[0] ?? null;
+        return sidebarElement()[0] ?? null;
       }
       if (selector === '[data-testid="orbital-panel-inbox"]') {
-        return sidebarElement[0] ?? null;
+        return sidebarElement()[0] ?? null;
       }
       return null;
     },
     querySelectorAll: (selector: string) => {
-      if (selector === 'a[data-testid^="inbox_list_"]') return rowElements;
-      if (selector === '[data-testid]') return testIdElements;
-      if (selector === 'a') return rowElements;
+      if (selector === 'a[data-testid^="inbox_list_"]') return rowElements();
+      if (selector === '[data-testid]') return testIdElements();
+      if (selector === 'a') return rowElements();
       return [];
     },
   };
   const page = {
     reloads: 0,
-    goto: async () => {
+    gotos,
+    context: () => ({
+      cookies: async () => input.cookies ?? [],
+    }),
+    goto: async (url: string) => {
+      gotos.push(url);
       if (input.gotoError) throw input.gotoError;
+      currentUrl = url;
     },
-    url: () => input.url ?? 'https://www.airbnb.com/hosting/messages',
+    url: () => currentUrl,
     reload: async () => {
       page.reloads += 1;
     },
@@ -156,6 +194,17 @@ describe('scrape-inbox sidebar metadata parser', () => {
     ]);
   });
 
+  it('propagates non-timeout navigation errors even from a messages URL', async () => {
+    const page = makeFakeInboxPage({
+      gotoError: new Error('net::ERR_INTERNET_DISCONNECTED'),
+      url: 'https://www.airbnb.com/hosting/messages/2470285483',
+    });
+
+    await expect(listInboxThreads(page as never, 10)).rejects.toThrow(
+      /ERR_INTERNET_DISCONNECTED/,
+    );
+  });
+
   it('handles cross-month stays and strips action/status noise', () => {
     const parsed = parseInboxThreadSummary(
       '2503263138',
@@ -240,6 +289,22 @@ describe('scrape-inbox sidebar metadata parser', () => {
     expect(isExplicitEmptyInboxText("Sorry, there's nothing here")).toBe(false);
   });
 
+  it('extracts only safe concrete Airbnb message thread URLs from cookies', () => {
+    expect(
+      extractConcreteMessagesUrlFromCookieValue(
+        encodeURIComponent('https://www.airbnb.com/hosting/messages/2470285483?filter=unread#top'),
+      ),
+    ).toBe('https://www.airbnb.com/hosting/messages/2470285483');
+    expect(extractConcreteMessagesUrlFromCookieValue('/hosting/messages/2470285483')).toBe(
+      'https://www.airbnb.com/hosting/messages/2470285483',
+    );
+
+    expect(extractConcreteMessagesUrlFromCookieValue('/hosting/messages')).toBeNull();
+    expect(extractConcreteMessagesUrlFromCookieValue('https://evil.com/hosting/messages/1')).toBeNull();
+    expect(extractConcreteMessagesUrlFromCookieValue('/hosting/messages/abc')).toBeNull();
+    expect(extractConcreteMessagesUrlFromCookieValue('invalid%cookie')).toBeNull();
+  });
+
   it('fails closed when Airbnb leaves the inbox sidebar unloaded', async () => {
     const page = makeFakeInboxPage({
       loaderPresent: true,
@@ -249,6 +314,62 @@ describe('scrape-inbox sidebar metadata parser', () => {
     await expect(listInboxThreads(page as never, 10)).rejects.toThrow(
       /inbox_list_unavailable/,
     );
+    expect(page.reloads).toBe(1);
+  });
+
+  it('uses the last known thread URL when the bare inbox shell never renders rows', async () => {
+    const fallbackUrl = 'https://www.airbnb.com/hosting/messages/2470285483';
+    const page = makeFakeInboxPage({
+      cookies: [
+        {
+          name: '__ps_lu',
+          value: encodeURIComponent(`${fallbackUrl}?filter=unread`),
+        },
+      ],
+      statesByUrl: {
+        'https://www.airbnb.com/hosting/messages': {
+          loaderPresent: true,
+          bodyText: 'Messages',
+        },
+        [fallbackUrl]: {
+          rows: [
+            {
+              id: '2470285483',
+              text: [
+                'Stuart',
+                'Currently hosting · May 7, 2026 – May 10, 2026 · One Bedroom Private Unit .3 Miles from Commons',
+              ].join('\n'),
+            },
+          ],
+        },
+      },
+    });
+
+    await expect(listInboxThreads(page as never, 10)).resolves.toMatchObject([
+      {
+        threadId: '2470285483',
+        guestName: 'Stuart',
+        checkIn: '2026-05-07',
+        checkOut: '2026-05-10',
+      },
+    ]);
+    expect(page.gotos).toEqual([
+      'https://www.airbnb.com/hosting/messages',
+      fallbackUrl,
+    ]);
+  });
+
+  it('ignores unsafe last known thread cookies and keeps failing closed', async () => {
+    const page = makeFakeInboxPage({
+      cookies: [{ name: '__ps_lu', value: 'https://evil.com/hosting/messages/2470285483' }],
+      loaderPresent: true,
+      bodyText: 'Messages',
+    });
+
+    await expect(listInboxThreads(page as never, 10)).rejects.toThrow(
+      /inbox_list_unavailable/,
+    );
+    expect(page.gotos).toEqual(['https://www.airbnb.com/hosting/messages']);
     expect(page.reloads).toBe(1);
   });
 
@@ -266,6 +387,18 @@ describe('scrape-inbox sidebar metadata parser', () => {
       bodyText: 'Messages\nGuest says: I am all caught up now.',
       loaderPresent: true,
       sidebarText: '',
+    });
+
+    await expect(listInboxThreads(page as never, 10)).rejects.toThrow(
+      /inbox_list_unavailable/,
+    );
+  });
+
+  it('does not treat active thread text inside the marker as an empty inbox', async () => {
+    const page = makeFakeInboxPage({
+      bodyText: 'Messages',
+      messageListPresent: true,
+      sidebarText: 'Guest says: I have no messages from the cleaner.',
     });
 
     await expect(listInboxThreads(page as never, 10)).rejects.toThrow(
