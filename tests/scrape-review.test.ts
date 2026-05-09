@@ -225,6 +225,45 @@ describe('review scraper pure guards', () => {
       ),
     ).toBe(false);
   });
+
+  it('trims Airbnb chrome and embedded page data from extracted review text', async () => {
+    const { __scrapeReviewTestHooks } = await vi.importActual<
+      typeof import('../src/playwright/scrape-review')
+    >('../src/playwright/scrape-review');
+
+    const raw =
+      'Paul was a great host and very quick to respond. The house is close enough to town. ' +
+      'Your public reply Thank you so much, Tom! Detailed feedback Check-in Responsive host ' +
+      'Site Footer Support Hosting Airbnb Footer section © 2026 Airbnb, Inc. {"props":{"pageProps":{}}}';
+
+    expect(__scrapeReviewTestHooks.trimReviewTextAtStopMarker(raw)).toBe(
+      'Paul was a great host and very quick to respond. The house is close enough to town.',
+    );
+  });
+
+  it('leaves normal review text intact when no Airbnb UI marker is present', async () => {
+    const { __scrapeReviewTestHooks } = await vi.importActual<
+      typeof import('../src/playwright/scrape-review')
+    >('../src/playwright/scrape-review');
+
+    expect(
+      __scrapeReviewTestHooks.trimReviewTextAtStopMarker(
+        'A clean, quiet stay with clear instructions and fast communication. My overall rating is excellent.',
+      ),
+    ).toBe('A clean, quiet stay with clear instructions and fast communication. My overall rating is excellent.');
+  });
+
+  it('trims embedded page data even when the JSON begins without whitespace', async () => {
+    const { __scrapeReviewTestHooks } = await vi.importActual<
+      typeof import('../src/playwright/scrape-review')
+    >('../src/playwright/scrape-review');
+
+    expect(
+      __scrapeReviewTestHooks.trimReviewTextAtStopMarker(
+        'Thoughtful guest and easy communication.{"props":{"pageProps":{}}}',
+      ),
+    ).toBe('Thoughtful guest and easy communication.');
+  });
 });
 
 describe('scrapeReviewHandler', () => {
