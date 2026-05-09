@@ -2,6 +2,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Request, Response } from 'express';
 import type { MachineEnv } from '../src/lib/env';
 
+const watermarkMocks = vi.hoisted(() => ({
+  load: vi.fn(),
+  merge: vi.fn(),
+  save: vi.fn(),
+}));
+
 vi.mock('../src/playwright/browser', () => ({
   ensureSpaListenerOnPage: vi.fn(),
   getBrowserContext: vi.fn(),
@@ -16,10 +22,23 @@ vi.mock('../src/lib/callback', () => ({
   postCallback: vi.fn(),
 }));
 
+vi.mock('../src/playwright/api-reader-cycle', () => ({
+  runApiReaderCycle: vi.fn(),
+}));
+
+vi.mock('../src/playwright/watermark-store', () => ({
+  WatermarkStore: vi.fn().mockImplementation(() => ({
+    load: watermarkMocks.load,
+    merge: watermarkMocks.merge,
+    save: watermarkMocks.save,
+  })),
+}));
+
 import { syncHandler } from '../src/endpoints/sync';
 import * as browserModule from '../src/playwright/browser';
 import * as scraperModule from '../src/playwright/scrape-inbox';
 import * as callbackModule from '../src/lib/callback';
+import * as apiCycleModule from '../src/playwright/api-reader-cycle';
 import { __resetSingleFlightForTesting } from '../src/lib/single-flight';
 
 const HOST_ID = '11111111-2222-3333-4444-555555555555';
@@ -58,15 +77,22 @@ function buildReqRes(body: unknown): {
 beforeEach(() => {
   __resetSingleFlightForTesting();
   vi.mocked(browserModule.getBrowserContext).mockReset();
+  vi.mocked(browserModule.ensureSpaListenerOnPage).mockReset();
   vi.mocked(browserModule.markAirbnbRequest).mockReset();
   vi.mocked(scraperModule.scrapeInbox).mockReset();
   vi.mocked(callbackModule.postCallback).mockReset();
+  vi.mocked(apiCycleModule.runApiReaderCycle).mockReset();
   vi.mocked(browserModule.getBrowserContext).mockResolvedValue({} as never);
   vi.mocked(callbackModule.postCallback).mockResolvedValue({
     ok: true,
     status: 200,
     bodyText: '{}',
   });
+  watermarkMocks.load.mockReset();
+  watermarkMocks.load.mockReturnValue({});
+  watermarkMocks.merge.mockReset();
+  watermarkMocks.merge.mockImplementation((prev, advances) => ({ ...prev, ...advances }));
+  watermarkMocks.save.mockReset();
 });
 
 describe('syncHandler single-flight and budget semantics', () => {
@@ -139,5 +165,418 @@ describe('syncHandler single-flight and budget semantics', () => {
         errors: expect.arrayContaining([expect.stringContaining('sync_time_budget_exhausted')]),
       }),
     );
+  });
+
+  it('uses API as the emitter when UI reads zero messages from a recoverable thread DOM failure', async () => {
+    vi.mocked(browserModule.getBrowserContext).mockResolvedValueOnce({
+      pages: () => [{}],
+    } as never);
+    vi.mocked(scraperModule.scrapeInbox).mockResolvedValueOnce({
+      messages: [],
+      bookingsFound: 0,
+      errors: ['thread_2515861751_failed: thread_message_list_unavailable'],
+    });
+    vi.mocked(apiCycleModule.runApiReaderCycle).mockResolvedValueOnce({
+      cycleId: 'cycle-api-fallback',
+      cycleStartAuthEpoch: 1,
+      cycleEndAuthEpoch: 1,
+      authEpochAborted: false,
+      mode: 'api',
+      ok: true,
+      apiMessages: [
+        {
+          airbnb_message_id: 'airbnb-100',
+          content: 'hello',
+          sender: 'guest',
+          timestamp: '2026-05-09T12:00:00.000Z',
+          conversation_airbnb_id: '2515861751',
+          guest_name: 'Guest',
+          listing_name: 'Listing',
+        },
+      ],
+      perThread: [],
+      totalApiMessagesEmitted: 1,
+      watermarkAdvancesApplied: { '2515861751': 1778328000000 },
+      inboxHashUsed: 'h1',
+      threadHashUsed: 'h2',
+      clientVersionUsed: 'client',
+      elapsedMs: 25,
+    });
+
+    const envWithApi: MachineEnv = {
+      ...env,
+      AIRBNB_API_USER_ID: '50758264',
+      AIRBNB_API_GLOBAL_USER_ID: 'Vmlld2VyOjUwNzU4MjY0',
+    };
+
+    const { req, res, statusSpy, jsonSpy } = buildReqRes({ host_id: HOST_ID, mode: 'incremental' });
+    await syncHandler(envWithApi)(req, res);
+
+    expect(statusSpy).toHaveBeenCalledWith(200);
+    expect(apiCycleModule.runApiReaderCycle).toHaveBeenCalledTimes(1);
+    expect(callbackModule.postCallback).toHaveBeenCalledTimes(1);
+    expect(callbackModule.postCallback).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: expect.objectContaining({
+          payload: expect.objectContaining({
+            messages: [expect.objectContaining({ airbnb_message_id: 'airbnb-100' })],
+            has_more: false,
+          }),
+        }),
+      }),
+    );
+    expect(watermarkMocks.save).toHaveBeenCalledWith({ '2515861751': 1778328000000 });
+    expect(jsonSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages_found: 1,
+        errors: [],
+        apiDiag: expect.objectContaining({
+          fallback: 'ui_zero_message_recovery',
+          messagesEmitted: 1,
+          error: null,
+        }),
+      }),
+    );
+  });
+
+  it('uses API fallback for a recoverable inbox-list DOM failure', async () => {
+    vi.mocked(browserModule.getBrowserContext).mockResolvedValueOnce({
+      pages: () => [{}],
+    } as never);
+    vi.mocked(scraperModule.scrapeInbox).mockResolvedValueOnce({
+      messages: [],
+      bookingsFound: 0,
+      errors: ['inbox_list_failed: inbox_list_unavailable:url=https://www.airbnb.com/hosting/messages'],
+    });
+    vi.mocked(apiCycleModule.runApiReaderCycle).mockResolvedValueOnce({
+      cycleId: 'cycle-api-fallback-inbox',
+      cycleStartAuthEpoch: 1,
+      cycleEndAuthEpoch: 1,
+      authEpochAborted: false,
+      mode: 'api',
+      ok: true,
+      apiMessages: [],
+      perThread: [],
+      totalApiMessagesEmitted: 0,
+      watermarkAdvancesApplied: {},
+      inboxHashUsed: 'h1',
+      threadHashUsed: 'h2',
+      clientVersionUsed: 'client',
+      elapsedMs: 25,
+    });
+
+    const envWithApi: MachineEnv = {
+      ...env,
+      AIRBNB_API_USER_ID: '50758264',
+      AIRBNB_API_GLOBAL_USER_ID: 'Vmlld2VyOjUwNzU4MjY0',
+    };
+
+    const { req, res, statusSpy, jsonSpy } = buildReqRes({ host_id: HOST_ID, mode: 'incremental' });
+    await syncHandler(envWithApi)(req, res);
+
+    expect(statusSpy).toHaveBeenCalledWith(200);
+    expect(apiCycleModule.runApiReaderCycle).toHaveBeenCalledTimes(1);
+    expect(callbackModule.postCallback).toHaveBeenCalledTimes(1);
+    expect(jsonSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages_found: 0,
+        errors: [],
+        apiDiag: expect.objectContaining({
+          fallback: 'ui_zero_message_recovery',
+          messagesEmitted: 0,
+          error: null,
+        }),
+      }),
+    );
+  });
+
+  it('uses API fallback for incremental zero-message budget exhaustion', async () => {
+    vi.mocked(browserModule.getBrowserContext).mockResolvedValueOnce({
+      pages: () => [{}],
+    } as never);
+    vi.mocked(scraperModule.scrapeInbox).mockResolvedValueOnce({
+      messages: [],
+      bookingsFound: 0,
+      errors: [
+        'sync_time_budget_exhausted:mode=incremental:phase=thread_loop:threads_read=0:threads_total=10:elapsed_ms=40000',
+      ],
+    });
+    vi.mocked(apiCycleModule.runApiReaderCycle).mockResolvedValueOnce({
+      cycleId: 'cycle-api-fallback-budget',
+      cycleStartAuthEpoch: 1,
+      cycleEndAuthEpoch: 1,
+      authEpochAborted: false,
+      mode: 'api',
+      ok: true,
+      apiMessages: [
+        {
+          airbnb_message_id: 'airbnb-101',
+          content: 'budget recovered',
+          sender: 'guest',
+          timestamp: '2026-05-09T12:05:00.000Z',
+          conversation_airbnb_id: '2515861751',
+          guest_name: 'Guest',
+          listing_name: 'Listing',
+        },
+      ],
+      perThread: [],
+      totalApiMessagesEmitted: 1,
+      watermarkAdvancesApplied: {},
+      inboxHashUsed: 'h1',
+      threadHashUsed: 'h2',
+      clientVersionUsed: 'client',
+      elapsedMs: 25,
+    });
+
+    const envWithApi: MachineEnv = {
+      ...env,
+      AIRBNB_API_USER_ID: '50758264',
+      AIRBNB_API_GLOBAL_USER_ID: 'Vmlld2VyOjUwNzU4MjY0',
+    };
+
+    const { req, res, statusSpy, jsonSpy } = buildReqRes({ host_id: HOST_ID, mode: 'incremental' });
+    await syncHandler(envWithApi)(req, res);
+
+    expect(statusSpy).toHaveBeenCalledWith(200);
+    expect(apiCycleModule.runApiReaderCycle).toHaveBeenCalledTimes(1);
+    expect(callbackModule.postCallback).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: expect.objectContaining({
+          payload: expect.objectContaining({
+            messages: [expect.objectContaining({ airbnb_message_id: 'airbnb-101' })],
+          }),
+        }),
+      }),
+    );
+    expect(jsonSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages_found: 1,
+        errors: [],
+        apiDiag: expect.objectContaining({
+          fallback: 'ui_zero_message_recovery',
+          messagesEmitted: 1,
+          error: null,
+        }),
+      }),
+    );
+  });
+
+  it('does not hide UI errors when fallback is eligible but API credentials are absent', async () => {
+    vi.mocked(scraperModule.scrapeInbox).mockResolvedValueOnce({
+      messages: [],
+      bookingsFound: 0,
+      errors: ['thread_2515861751_failed: thread_message_list_unavailable'],
+    });
+
+    const { req, res, statusSpy, jsonSpy } = buildReqRes({ host_id: HOST_ID, mode: 'incremental' });
+    await syncHandler(env)(req, res);
+
+    expect(statusSpy).toHaveBeenCalledWith(200);
+    expect(apiCycleModule.runApiReaderCycle).not.toHaveBeenCalled();
+    expect(jsonSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages_found: 0,
+        errors: ['thread_2515861751_failed: thread_message_list_unavailable'],
+      }),
+    );
+  });
+
+  it('does not API-fallback when the UI scraper already emitted messages', async () => {
+    vi.mocked(scraperModule.scrapeInbox).mockResolvedValueOnce({
+      messages: [
+        {
+          airbnb_message_id: 'ui-1',
+          content: 'already captured',
+          sender: 'guest',
+          timestamp: '2026-05-09T12:00:00.000Z',
+          conversation_airbnb_id: 'thread-1',
+          guest_name: 'Guest',
+          listing_name: 'Listing',
+        },
+      ],
+      bookingsFound: 0,
+      errors: [
+        'sync_time_budget_exhausted:mode=incremental:phase=thread_loop:threads_read=1:threads_total=10:elapsed_ms=40000',
+      ],
+    });
+
+    const envWithApi: MachineEnv = {
+      ...env,
+      AIRBNB_API_USER_ID: '50758264',
+      AIRBNB_API_GLOBAL_USER_ID: 'Vmlld2VyOjUwNzU4MjY0',
+    };
+
+    const { req, res, statusSpy } = buildReqRes({ host_id: HOST_ID, mode: 'incremental' });
+    await syncHandler(envWithApi)(req, res);
+
+    expect(statusSpy).toHaveBeenCalledWith(200);
+    expect(apiCycleModule.runApiReaderCycle).not.toHaveBeenCalled();
+    expect(callbackModule.postCallback).toHaveBeenCalledTimes(1);
+    expect(callbackModule.postCallback).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: expect.objectContaining({
+          payload: expect.objectContaining({
+            messages: [expect.objectContaining({ airbnb_message_id: 'ui-1' })],
+          }),
+        }),
+      }),
+    );
+  });
+
+  it('does not commit API fallback watermarks when callback delivery fails', async () => {
+    vi.mocked(browserModule.getBrowserContext).mockResolvedValueOnce({
+      pages: () => [{}],
+    } as never);
+    vi.mocked(scraperModule.scrapeInbox).mockResolvedValueOnce({
+      messages: [],
+      bookingsFound: 0,
+      errors: ['thread_2515861751_failed: thread_message_list_unavailable'],
+    });
+    vi.mocked(apiCycleModule.runApiReaderCycle).mockResolvedValueOnce({
+      cycleId: 'cycle-api-fallback-callback-fail',
+      cycleStartAuthEpoch: 1,
+      cycleEndAuthEpoch: 1,
+      authEpochAborted: false,
+      mode: 'api',
+      ok: true,
+      apiMessages: [
+        {
+          airbnb_message_id: 'airbnb-100',
+          content: 'hello',
+          sender: 'guest',
+          timestamp: '2026-05-09T12:00:00.000Z',
+          conversation_airbnb_id: '2515861751',
+          guest_name: 'Guest',
+          listing_name: 'Listing',
+        },
+      ],
+      perThread: [],
+      totalApiMessagesEmitted: 1,
+      watermarkAdvancesApplied: { '2515861751': 1778328000000 },
+      inboxHashUsed: 'h1',
+      threadHashUsed: 'h2',
+      clientVersionUsed: 'client',
+      elapsedMs: 25,
+    });
+    vi.mocked(callbackModule.postCallback).mockResolvedValueOnce({
+      ok: false,
+      status: 500,
+      bodyText: 'nope',
+    });
+
+    const envWithApi: MachineEnv = {
+      ...env,
+      AIRBNB_API_USER_ID: '50758264',
+      AIRBNB_API_GLOBAL_USER_ID: 'Vmlld2VyOjUwNzU4MjY0',
+    };
+
+    const { req, res, statusSpy, jsonSpy } = buildReqRes({ host_id: HOST_ID, mode: 'incremental' });
+    await syncHandler(envWithApi)(req, res);
+
+    expect(statusSpy).toHaveBeenCalledWith(200);
+    expect(watermarkMocks.save).not.toHaveBeenCalled();
+    expect(jsonSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages_found: 1,
+        errors: ['batch_1_status_500'],
+      }),
+    );
+  });
+
+  it('keeps the original UI error visible when the API fallback also fails', async () => {
+    vi.mocked(browserModule.getBrowserContext).mockResolvedValueOnce({
+      pages: () => [{}],
+    } as never);
+    vi.mocked(scraperModule.scrapeInbox).mockResolvedValueOnce({
+      messages: [],
+      bookingsFound: 0,
+      errors: ['thread_2515861751_failed: thread_message_list_unavailable'],
+    });
+    vi.mocked(apiCycleModule.runApiReaderCycle).mockResolvedValueOnce({
+      cycleId: 'cycle-api-fallback-failed',
+      cycleStartAuthEpoch: 1,
+      cycleEndAuthEpoch: 1,
+      authEpochAborted: false,
+      mode: 'api',
+      ok: false,
+      apiSkipReason: 'inbox_failed',
+      inboxFailureReason: 'http_error',
+      apiMessages: [],
+      perThread: [],
+      totalApiMessagesEmitted: 0,
+      watermarkAdvancesApplied: {},
+      inboxHashUsed: 'h1',
+      threadHashUsed: 'h2',
+      clientVersionUsed: 'client',
+      elapsedMs: 25,
+    });
+
+    const envWithApi: MachineEnv = {
+      ...env,
+      AIRBNB_API_USER_ID: '50758264',
+      AIRBNB_API_GLOBAL_USER_ID: 'Vmlld2VyOjUwNzU4MjY0',
+    };
+
+    const { req, res, statusSpy, jsonSpy } = buildReqRes({ host_id: HOST_ID, mode: 'incremental' });
+    await syncHandler(envWithApi)(req, res);
+
+    expect(statusSpy).toHaveBeenCalledWith(200);
+    expect(callbackModule.postCallback).toHaveBeenCalledTimes(1);
+    expect(jsonSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages_found: 0,
+        errors: [
+          'thread_2515861751_failed: thread_message_list_unavailable',
+          'api_fallback_failed: inbox_failed',
+        ],
+      }),
+    );
+  });
+
+  it('does not add API work after an initial sync exhausts the full UI time budget', async () => {
+    vi.mocked(scraperModule.scrapeInbox).mockResolvedValueOnce({
+      messages: [],
+      bookingsFound: 0,
+      errors: [
+        'sync_time_budget_exhausted:mode=initial:phase=thread_loop:threads_read=0:threads_total=30:elapsed_ms=180000',
+      ],
+    });
+
+    const envWithApi: MachineEnv = {
+      ...env,
+      AIRBNB_API_USER_ID: '50758264',
+      AIRBNB_API_GLOBAL_USER_ID: 'Vmlld2VyOjUwNzU4MjY0',
+    };
+
+    const { req, res, statusSpy } = buildReqRes({ host_id: HOST_ID, mode: 'initial' });
+    await syncHandler(envWithApi)(req, res);
+
+    expect(statusSpy).toHaveBeenCalledWith(200);
+    expect(apiCycleModule.runApiReaderCycle).not.toHaveBeenCalled();
+    expect(callbackModule.postCallback).not.toHaveBeenCalled();
+  });
+
+  it('does not add API work after initial budget exhaustion even with earlier DOM errors', async () => {
+    vi.mocked(scraperModule.scrapeInbox).mockResolvedValueOnce({
+      messages: [],
+      bookingsFound: 0,
+      errors: [
+        'thread_2515861751_failed: thread_message_list_unavailable',
+        'sync_time_budget_exhausted:mode=initial:phase=thread_loop:threads_read=0:threads_total=30:elapsed_ms=180000',
+      ],
+    });
+
+    const envWithApi: MachineEnv = {
+      ...env,
+      AIRBNB_API_USER_ID: '50758264',
+      AIRBNB_API_GLOBAL_USER_ID: 'Vmlld2VyOjUwNzU4MjY0',
+    };
+
+    const { req, res, statusSpy } = buildReqRes({ host_id: HOST_ID, mode: 'initial' });
+    await syncHandler(envWithApi)(req, res);
+
+    expect(statusSpy).toHaveBeenCalledWith(200);
+    expect(apiCycleModule.runApiReaderCycle).not.toHaveBeenCalled();
+    expect(callbackModule.postCallback).not.toHaveBeenCalled();
   });
 });
