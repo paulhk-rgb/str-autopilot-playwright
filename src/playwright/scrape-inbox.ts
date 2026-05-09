@@ -111,6 +111,13 @@ const EMPTY_INBOX_TEXT_PATTERN_SOURCE =
   "\\b(no messages|no conversations|all caught up|don['’]t have any messages|do not have any messages|you have no messages)\\b";
 const EMPTY_INBOX_TEXT_PATTERN = new RegExp(EMPTY_INBOX_TEXT_PATTERN_SOURCE, 'i');
 const AIRBNB_MESSAGES_URL = 'https://www.airbnb.com/hosting/messages';
+const INBOX_NAV_TIMEOUT_MS = 30_000;
+const INBOX_NAV_TIMEOUT_WITH_FALLBACK_MS = 12_000;
+const INBOX_READY_TIMEOUT_MS = 45_000;
+const INBOX_READY_TIMEOUT_WITH_FALLBACK_MS = 8_000;
+const INBOX_RETRY_READY_TIMEOUT_MS = 20_000;
+const THREAD_NAV_TIMEOUT_MS = 10_000;
+const THREAD_READY_TIMEOUT_MS = 8_000;
 
 function normalizeSidebarText(text: string): string {
   return text
@@ -428,11 +435,39 @@ function isNavigationTimeout(err: unknown): boolean {
   return /Timeout \d+ms exceeded|TimeoutError/i.test(errorText);
 }
 
+function isTrustedAirbnbHostname(hostname: string): boolean {
+  return /^(?:www\.)?airbnb\.[a-z]{2,}(?:\.[a-z]{2,})?$/i.test(hostname);
+}
+
+function hasReachedMessagesTarget(
+  currentUrl: string,
+  targetUrl: string,
+  label: 'inbox' | 'thread',
+): boolean {
+  let current: URL;
+  let target: URL;
+  try {
+    current = new URL(currentUrl);
+    target = new URL(targetUrl);
+  } catch {
+    return false;
+  }
+
+  if (current.protocol !== 'https:' || !isTrustedAirbnbHostname(current.hostname)) return false;
+
+  if (label === 'thread') {
+    const normalizePath = (path: string) => path.replace(/\/+$/, '');
+    return normalizePath(current.pathname) === normalizePath(target.pathname);
+  }
+
+  return /^\/hosting\/messages(?:\/|$)/.test(current.pathname);
+}
+
 async function gotoMessagesUrl(
   page: Page,
   url: string,
   label: 'inbox' | 'thread',
-  timeoutMs = 30_000,
+  timeoutMs = INBOX_NAV_TIMEOUT_MS,
 ): Promise<void> {
   try {
     await page.goto(url, {
@@ -442,7 +477,7 @@ async function gotoMessagesUrl(
   } catch (err) {
     const currentUrl = page.url();
     const errorText = err instanceof Error ? err.message : String(err);
-    if (!isNavigationTimeout(err) || !/\/hosting\/messages(?:\/|$|\?)/.test(currentUrl)) {
+    if (!isNavigationTimeout(err) || !hasReachedMessagesTarget(currentUrl, url, label)) {
       throw err;
     }
     console.warn(`[scrape-inbox] ${label} navigation timed out after reaching messages page`, {
@@ -452,8 +487,12 @@ async function gotoMessagesUrl(
   }
 }
 
-async function gotoInbox(page: Page, url = AIRBNB_MESSAGES_URL): Promise<void> {
-  await gotoMessagesUrl(page, url, 'inbox');
+async function gotoInbox(
+  page: Page,
+  url = AIRBNB_MESSAGES_URL,
+  timeoutMs = INBOX_NAV_TIMEOUT_MS,
+): Promise<void> {
+  await gotoMessagesUrl(page, url, 'inbox', timeoutMs);
 }
 
 async function listInboxThreads(page: Page, max: number): Promise<InboxThreadSummary[]> {
@@ -464,7 +503,11 @@ async function listInboxThreads(page: Page, max: number): Promise<InboxThreadSum
   for (let attempt = 1; attempt <= 2; attempt++) {
     if (attempt === 1) {
       attemptedStrategies.push('bare');
-      await gotoInbox(page);
+      await gotoInbox(
+        page,
+        AIRBNB_MESSAGES_URL,
+        fallbackUrl ? INBOX_NAV_TIMEOUT_WITH_FALLBACK_MS : INBOX_NAV_TIMEOUT_MS,
+      );
     } else if (
       fallbackUrl &&
       lastDiag &&
@@ -479,7 +522,7 @@ async function listInboxThreads(page: Page, max: number): Promise<InboxThreadSum
         prior_inbox_links: lastDiag.inboxLinks,
         fallback_path: new URL(fallbackUrl).pathname,
       });
-      await gotoInbox(page, fallbackUrl);
+      await gotoInbox(page, fallbackUrl, INBOX_RETRY_READY_TIMEOUT_MS);
     } else {
       attemptedStrategies.push('reload');
       console.warn('[scrape-inbox] retrying inbox list after unloaded sidebar', {
@@ -502,7 +545,14 @@ async function listInboxThreads(page: Page, max: number): Promise<InboxThreadSum
     // Wait for actual rows or an explicit empty state; loader disappearance
     // alone is not enough because we observed production returning a bare
     // shell (`Messages` + loader) that would otherwise be mistaken for success.
-    await waitForInboxRowsOrEmpty(page, attempt === 1 ? 45_000 : 20_000);
+    await waitForInboxRowsOrEmpty(
+      page,
+      attempt === 1
+        ? fallbackUrl
+          ? INBOX_READY_TIMEOUT_WITH_FALLBACK_MS
+          : INBOX_READY_TIMEOUT_MS
+        : INBOX_RETRY_READY_TIMEOUT_MS,
+    );
     await page.waitForTimeout(1500);
 
     lastDiag = await collectInboxDiag(page);
@@ -556,19 +606,13 @@ async function readThread(
   threadId: string,
   msgLimit: number,
 ): Promise<ParsedGroup[]> {
-  await gotoMessagesUrl(page, `${AIRBNB_MESSAGES_URL}/${threadId}`, 'thread', 12_000);
+  await gotoMessagesUrl(page, `${AIRBNB_MESSAGES_URL}/${threadId}`, 'thread', THREAD_NAV_TIMEOUT_MS);
   const ready = await page
-    .waitForSelector('[data-testid="message-list"]', { timeout: 12_000 })
+    .waitForSelector('[data-testid="message-list"]', { timeout: THREAD_READY_TIMEOUT_MS })
     .then(() => true)
     .catch(() => false);
   if (!ready) {
-    // One reload retry — Airbnb's SPA sometimes drops the message list on first nav.
-    try {
-      await page.reload({ waitUntil: 'domcontentloaded', timeout: 20_000 });
-      await page.waitForSelector('[data-testid="message-list"]', { timeout: 12_000 });
-    } catch {
-      return [];
-    }
+    throw new Error('thread_message_list_unavailable');
   }
 
   return page.evaluate((limit) => {
@@ -687,8 +731,13 @@ export async function scrapeInbox(
 
     for (const thread of threads) {
       const threadId = thread.threadId;
+      let threadPage: Page | null = null;
       try {
-        const groups = await readThread(page, threadId, budget.maxMessagesPerThread);
+        // Fresh page per thread prevents stale message-list DOM from a previous
+        // thread from being parsed under a new thread id after an Airbnb SPA
+        // navigation timeout.
+        threadPage = await ctx.newPage();
+        const groups = await readThread(threadPage, threadId, budget.maxMessagesPerThread);
         for (const g of groups) {
           if (g.senderType === 'system') continue; // Airbnb-service messages are noise for now.
           const sender: 'guest' | 'host' =
@@ -711,6 +760,8 @@ export async function scrapeInbox(
         errors.push(
           `thread_${threadId}_failed: ${err instanceof Error ? err.message : String(err)}`,
         );
+      } finally {
+        await threadPage?.close().catch(() => undefined);
       }
     }
   } finally {
@@ -724,6 +775,7 @@ export const __scrapeInboxTestHooks = {
   extractConcreteMessagesUrlFromCookieValue,
   parseInboxThreadSummary,
   readThread,
+  hasReachedMessagesTarget,
   isExplicitEmptyInboxText,
   listInboxThreads,
 };

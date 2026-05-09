@@ -4,6 +4,7 @@ import { __scrapeInboxTestHooks } from '../src/playwright/scrape-inbox';
 
 const {
   extractConcreteMessagesUrlFromCookieValue,
+  hasReachedMessagesTarget,
   isExplicitEmptyInboxText,
   listInboxThreads,
   parseInboxThreadSummary,
@@ -255,6 +256,77 @@ describe('scrape-inbox sidebar metadata parser', () => {
         dateHeading: 'Today',
       },
     ]);
+  });
+
+  it('does not tolerate a thread timeout that leaves the page on a different thread', async () => {
+    const staleThreadUrl = 'https://www.airbnb.com/hosting/messages/2462778940';
+    const page = {
+      goto: async () => {
+        throw new Error('page.goto: Timeout 10000ms exceeded');
+      },
+      url: () => staleThreadUrl,
+      waitForSelector: async () => {
+        throw new Error('stale message list must not be inspected');
+      },
+      evaluate: async () => {
+        throw new Error('stale message list must not be parsed');
+      },
+    };
+
+    await expect(readThread(page as never, '2470285483', 20)).rejects.toThrow(
+      /Timeout 10000ms exceeded/,
+    );
+  });
+
+  it('allows query strings when checking whether a timed-out thread reached its target', () => {
+    expect(
+      hasReachedMessagesTarget(
+        'https://www.airbnb.com/hosting/messages/2470285483/?locale=en',
+        'https://www.airbnb.com/hosting/messages/2470285483',
+        'thread',
+      ),
+    ).toBe(true);
+    expect(
+      hasReachedMessagesTarget(
+        'https://www.airbnb.com/hosting/messages/2462778940?locale=en',
+        'https://www.airbnb.com/hosting/messages/2470285483',
+        'thread',
+      ),
+    ).toBe(false);
+    expect(
+      hasReachedMessagesTarget(
+        'https://www.airbnb.ca/hosting/messages/2470285483?locale=en-CA',
+        'https://www.airbnb.com/hosting/messages/2470285483',
+        'thread',
+      ),
+    ).toBe(true);
+    expect(
+      hasReachedMessagesTarget(
+        'https://evil.example/hosting/messages/2470285483',
+        'https://www.airbnb.com/hosting/messages/2470285483',
+        'thread',
+      ),
+    ).toBe(false);
+  });
+
+  it('fails closed when a thread page never renders a message list', async () => {
+    let reloadCalled = false;
+    const page = {
+      goto: async () => undefined,
+      url: () => 'https://www.airbnb.com/hosting/messages/2470285483',
+      waitForSelector: async () => {
+        throw new Error('selector timeout');
+      },
+      reload: async () => {
+        reloadCalled = true;
+      },
+      evaluate: async () => [],
+    };
+
+    await expect(readThread(page as never, '2470285483', 20)).rejects.toThrow(
+      /thread_message_list_unavailable/,
+    );
+    expect(reloadCalled).toBe(false);
   });
 
   it('handles cross-month stays and strips action/status noise', () => {
