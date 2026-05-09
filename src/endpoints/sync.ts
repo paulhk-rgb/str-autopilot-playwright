@@ -35,6 +35,7 @@ import {
 import { scrapeInbox, type ScrapedMessage } from '../playwright/scrape-inbox';
 import { runApiReaderCycle } from '../playwright/api-reader-cycle';
 import { WatermarkStore } from '../playwright/watermark-store';
+import { tryAcquireSingleFlight } from '../lib/single-flight';
 
 interface SyncBody {
   host_id: string;
@@ -79,113 +80,137 @@ export function syncHandler(env: MachineEnv) {
       return res.status(403).json({ error: 'host_id_mismatch' });
     }
 
-    // Ensure the browser is up — spec §2.5 step 1 relies on this for cookie validity too.
-    let ctx;
+    const lock = tryAcquireSingleFlight('sync');
+    if (!lock) {
+      return res.status(409).json({
+        messages_found: 0,
+        bookings_found: 0,
+        errors: ['sync_already_running'],
+      });
+    }
+
     try {
-      ctx = await getBrowserContext({ profileDir: env.PROFILE_DIR });
+      // Ensure the browser is up — spec §2.5 step 1 relies on this for cookie validity too.
+      let ctx;
+      try {
+        ctx = await getBrowserContext({ profileDir: env.PROFILE_DIR });
+      } catch (err) {
+        return res.status(500).json({
+          messages_found: 0,
+          bookings_found: 0,
+          errors: ['browser_failed: ' + (err instanceof Error ? err.message : String(err))],
+        });
+      }
+
+      markAirbnbRequest();
+
+      // v0.3 wiring — dispatch by INBOX_READER_MODE.
+      // - 'ui'     : existing UI scraper is sole emitter (production default).
+      // - 'shadow' : run UI scraper as emitter; run API cycle as observer; emit
+      //              API diagnostics to side channel only (logs / health).
+      // - 'api'    : API cycle is sole emitter; UI scraper not invoked. Promote
+      //              ONLY after shadow mode shows ≥3 days of 0 mismatches per
+      //              spec §10 v0.4.
+      let messages: ScrapedMessage[] = [];
+      let bookingsFound = 0;
+      const errors: string[] = [];
+      let apiDiag: unknown = null;
+      // commitWatermarks is invoked AFTER all callback batches return 2xx (api
+      // mode only). No-op in ui/shadow modes. Spec §4 step 6 + audit B2.
+      let commitWatermarks: () => void = () => undefined;
+
+      if (env.INBOX_READER_MODE === 'ui') {
+        const uiResult = await scrapeInbox(ctx, {
+          mode: req.body.mode,
+          since: req.body.since,
+          hostDisplayName: req.body.host_display_name,
+        });
+        messages = uiResult.messages;
+        bookingsFound = uiResult.bookingsFound;
+        errors.push(...uiResult.errors);
+      } else if (env.INBOX_READER_MODE === 'shadow') {
+        // Run UI THEN API sequentially to avoid execution-context collisions
+        // on the shared page. UI remains sole callback emitter; API output is
+        // compared against UI inline (v0.4 prerequisite — real shadow gate)
+        // and surfaced in apiDiag for the 3-day promotion gate.
+        const uiResult = await scrapeInbox(ctx, {
+          mode: req.body.mode,
+          since: req.body.since,
+          hostDisplayName: req.body.host_display_name,
+        });
+        messages = uiResult.messages;
+        bookingsFound = uiResult.bookingsFound;
+        errors.push(...uiResult.errors);
+        const apiResult = await runApiReaderShadowCycle(ctx, env, uiResult.messages);
+        apiDiag = apiResult;
+      } else {
+        // api mode — API cycle is sole emitter.
+        const apiResult = await runApiReaderEmissionCycle(ctx, env);
+        messages = apiResult.messages;
+        bookingsFound = 0; // bookings extraction is a v1 follow-up
+        apiDiag = apiResult.diag;
+        if (apiResult.error) errors.push(apiResult.error);
+        commitWatermarks = apiResult.commitWatermarks;
+      }
+
+      const batches = chunk(messages, MAX_BATCH_SIZE);
+      // Always emit at least one batch so the callback handler sees has_more=false closure
+      // when there are zero messages (avoids callers inferring "sync never completed").
+      const effective = batches.length > 0 ? batches : [[] as ScrapedMessage[]];
+
+      const callbackErrors: string[] = [];
+      const suppressEmptyBudgetClosure =
+        messages.length === 0 &&
+        errors.some((err) => String(err).startsWith('sync_time_budget_exhausted'));
+      const callbackBatches = suppressEmptyBudgetClosure ? [] : effective;
+      for (let i = 0; i < callbackBatches.length; i++) {
+        const batch = callbackBatches[i];
+        const isLast = i === callbackBatches.length - 1;
+        const body = {
+          action: 'sync_messages_batch' as const,
+          host_id: env.HOST_ID,
+          payload: {
+            messages: batch,
+            page: i + 1,
+            has_more: !isLast,
+          },
+          timestamp: new Date().toISOString(), // for current staysync-app callback route skew check
+        };
+        try {
+          const resCb = await postCallback({ env, body });
+          if (!resCb.ok) {
+            callbackErrors.push(`batch_${i + 1}_status_${resCb.status}`);
+          }
+        } catch (err) {
+          callbackErrors.push(
+            `batch_${i + 1}_error: ` + (err instanceof Error ? err.message : String(err)),
+          );
+        }
+      }
+
+      // api mode + all batches succeeded → commit watermark advances.
+      // Per spec §4 step 6 (post-2xx ack only). Audit B2 unified finding.
+      if (env.INBOX_READER_MODE === 'api' && callbackErrors.length === 0) {
+        commitWatermarks();
+      }
+
+      const diag = (globalThis as unknown as { __lastInboxDiag?: unknown }).__lastInboxDiag;
+      return res.status(200).json({
+        messages_found: messages.length,
+        bookings_found: bookingsFound,
+        errors: [...errors, ...callbackErrors],
+        diag,
+        apiDiag,
+      });
     } catch (err) {
       return res.status(500).json({
         messages_found: 0,
         bookings_found: 0,
-        errors: ['browser_failed: ' + (err instanceof Error ? err.message : String(err))],
+        errors: ['sync_failed: ' + (err instanceof Error ? err.message : String(err))],
       });
+    } finally {
+      lock.release();
     }
-
-    markAirbnbRequest();
-
-    // v0.3 wiring — dispatch by INBOX_READER_MODE.
-    // - 'ui'     : existing UI scraper is sole emitter (production default).
-    // - 'shadow' : run UI scraper as emitter; run API cycle as observer; emit
-    //              API diagnostics to side channel only (logs / health).
-    // - 'api'    : API cycle is sole emitter; UI scraper not invoked. Promote
-    //              ONLY after shadow mode shows ≥3 days of 0 mismatches per
-    //              spec §10 v0.4.
-    let messages: ScrapedMessage[] = [];
-    let bookingsFound = 0;
-    const errors: string[] = [];
-    let apiDiag: unknown = null;
-    // commitWatermarks is invoked AFTER all callback batches return 2xx (api
-    // mode only). No-op in ui/shadow modes. Spec §4 step 6 + audit B2.
-    let commitWatermarks: () => void = () => undefined;
-
-    if (env.INBOX_READER_MODE === 'ui') {
-      const uiResult = await scrapeInbox(ctx, {
-        mode: req.body.mode,
-        since: req.body.since,
-        hostDisplayName: req.body.host_display_name,
-      });
-      messages = uiResult.messages;
-      bookingsFound = uiResult.bookingsFound;
-      errors.push(...uiResult.errors);
-    } else if (env.INBOX_READER_MODE === 'shadow') {
-      // Run UI THEN API sequentially to avoid execution-context collisions
-      // on the shared page. UI remains sole callback emitter; API output is
-      // compared against UI inline (v0.4 prerequisite — real shadow gate)
-      // and surfaced in apiDiag for the 3-day promotion gate.
-      const uiResult = await scrapeInbox(ctx, {
-        mode: req.body.mode,
-        since: req.body.since,
-        hostDisplayName: req.body.host_display_name,
-      });
-      messages = uiResult.messages;
-      bookingsFound = uiResult.bookingsFound;
-      errors.push(...uiResult.errors);
-      const apiResult = await runApiReaderShadowCycle(ctx, env, uiResult.messages);
-      apiDiag = apiResult;
-    } else {
-      // api mode — API cycle is sole emitter.
-      const apiResult = await runApiReaderEmissionCycle(ctx, env);
-      messages = apiResult.messages;
-      bookingsFound = 0; // bookings extraction is a v1 follow-up
-      apiDiag = apiResult.diag;
-      if (apiResult.error) errors.push(apiResult.error);
-      commitWatermarks = apiResult.commitWatermarks;
-    }
-
-    const batches = chunk(messages, MAX_BATCH_SIZE);
-    // Always emit at least one batch so the callback handler sees has_more=false closure even
-    // when there are zero messages (avoids callers inferring "sync never completed").
-    const effective = batches.length > 0 ? batches : [[] as ScrapedMessage[]];
-
-    const callbackErrors: string[] = [];
-    for (let i = 0; i < effective.length; i++) {
-      const isLast = i === effective.length - 1;
-      const body = {
-        action: 'sync_messages_batch' as const,
-        host_id: env.HOST_ID,
-        payload: {
-          messages: effective[i],
-          page: i + 1,
-          has_more: !isLast,
-        },
-        timestamp: new Date().toISOString(), // for current staysync-app callback route skew check
-      };
-      try {
-        const resCb = await postCallback({ env, body });
-        if (!resCb.ok) {
-          callbackErrors.push(`batch_${i + 1}_status_${resCb.status}`);
-        }
-      } catch (err) {
-        callbackErrors.push(
-          `batch_${i + 1}_error: ` + (err instanceof Error ? err.message : String(err)),
-        );
-      }
-    }
-
-    // api mode + all batches succeeded → commit watermark advances.
-    // Per spec §4 step 6 (post-2xx ack only). Audit B2 unified finding.
-    if (env.INBOX_READER_MODE === 'api' && callbackErrors.length === 0) {
-      commitWatermarks();
-    }
-
-    const diag = (globalThis as unknown as { __lastInboxDiag?: unknown }).__lastInboxDiag;
-    return res.status(200).json({
-      messages_found: messages.length,
-      bookings_found: bookingsFound,
-      errors: [...errors, ...callbackErrors],
-      diag,
-      apiDiag,
-    });
   };
 }
 

@@ -22,6 +22,7 @@
  */
 
 import { createHash } from 'crypto';
+import { performance } from 'node:perf_hooks';
 import type { BrowserContext, Page } from 'playwright';
 
 export interface ScrapedMessage {
@@ -50,11 +51,23 @@ export interface ScrapeOptions {
   since?: string;
   /** Account display name treated as `host` (everyone else is `guest`). */
   hostDisplayName?: string;
+  /** Test-only override; production callers should use the mode budgets. */
+  timeBudgetMs?: number;
+  /** Test-only monotonic clock injection. */
+  nowMs?: () => number;
 }
 
 interface ScrapeBudget {
   maxThreads: number;
   maxMessagesPerThread: number;
+  maxRuntimeMs: number;
+  threadReserveMs: number;
+}
+
+interface ScrapeDeadline {
+  startedAtMs: number;
+  maxRuntimeMs: number;
+  nowMs: () => number;
 }
 
 interface InboxThreadSummary {
@@ -118,6 +131,8 @@ const INBOX_READY_TIMEOUT_WITH_FALLBACK_MS = 8_000;
 const INBOX_RETRY_READY_TIMEOUT_MS = 20_000;
 const THREAD_NAV_TIMEOUT_MS = 10_000;
 const THREAD_READY_TIMEOUT_MS = 8_000;
+const THREAD_RESERVE_MS = 20_000;
+const MIN_STEP_TIMEOUT_MS = 500;
 
 function normalizeSidebarText(text: string): string {
   return text
@@ -276,13 +291,70 @@ function parseInboxThreadSummary(
 function budgetFor(mode: ScrapeOptions['mode']): ScrapeBudget {
   switch (mode) {
     case 'incremental':
-      return { maxThreads: 10, maxMessagesPerThread: 20 };
+      return {
+        maxThreads: 10,
+        maxMessagesPerThread: 20,
+        maxRuntimeMs: 40_000,
+        threadReserveMs: THREAD_RESERVE_MS,
+      };
     case 'full':
-      return { maxThreads: 100, maxMessagesPerThread: 100 };
+      return {
+        maxThreads: 100,
+        maxMessagesPerThread: 100,
+        maxRuntimeMs: 200_000,
+        threadReserveMs: THREAD_RESERVE_MS,
+      };
     case 'initial':
     default:
-      return { maxThreads: 30, maxMessagesPerThread: 50 };
+      return {
+        maxThreads: 30,
+        maxMessagesPerThread: 50,
+        maxRuntimeMs: 180_000,
+        threadReserveMs: THREAD_RESERVE_MS,
+      };
   }
+}
+
+function remainingBudgetMs(deadline: ScrapeDeadline): number {
+  return Math.max(0, deadline.maxRuntimeMs - (deadline.nowMs() - deadline.startedAtMs));
+}
+
+function elapsedBudgetMs(deadline: ScrapeDeadline): number {
+  return Math.max(0, deadline.nowMs() - deadline.startedAtMs);
+}
+
+function boundedTimeoutMs(deadline: ScrapeDeadline, desiredMs: number): number {
+  return Math.max(1, Math.min(desiredMs, Math.floor(remainingBudgetMs(deadline))));
+}
+
+class SyncTimeBudgetExhaustedError extends Error {
+  constructor(readonly phase: string) {
+    super(`sync_time_budget_exhausted:${phase}`);
+    this.name = 'SyncTimeBudgetExhaustedError';
+  }
+}
+
+function assertBudget(deadline: ScrapeDeadline, minMs: number, phase: string): void {
+  if (remainingBudgetMs(deadline) < minMs) {
+    throw new SyncTimeBudgetExhaustedError(phase);
+  }
+}
+
+function formatBudgetExhaustedError(args: {
+  mode: ScrapeOptions['mode'];
+  phase: string;
+  threadsRead: number;
+  threadsTotal: number;
+  elapsedMs: number;
+}): string {
+  return [
+    'sync_time_budget_exhausted',
+    `mode=${args.mode}`,
+    `phase=${args.phase}`,
+    `threads_read=${args.threadsRead}`,
+    `threads_total=${args.threadsTotal}`,
+    `elapsed_ms=${Math.round(args.elapsedMs)}`,
+  ].join(':');
 }
 
 function stableMessageId(
@@ -495,18 +567,28 @@ async function gotoInbox(
   await gotoMessagesUrl(page, url, 'inbox', timeoutMs);
 }
 
-async function listInboxThreads(page: Page, max: number): Promise<InboxThreadSummary[]> {
+async function listInboxThreads(
+  page: Page,
+  max: number,
+  deadline?: ScrapeDeadline,
+): Promise<InboxThreadSummary[]> {
   let lastDiag: InboxPageDiag | null = null;
   const fallbackUrl = await readLastKnownMessagesUrl(page);
   const attemptedStrategies: string[] = [];
 
   for (let attempt = 1; attempt <= 2; attempt++) {
     if (attempt === 1) {
+      if (deadline) assertBudget(deadline, MIN_STEP_TIMEOUT_MS, 'inbox');
       attemptedStrategies.push('bare');
       await gotoInbox(
         page,
         AIRBNB_MESSAGES_URL,
-        fallbackUrl ? INBOX_NAV_TIMEOUT_WITH_FALLBACK_MS : INBOX_NAV_TIMEOUT_MS,
+        deadline
+          ? boundedTimeoutMs(
+              deadline,
+              fallbackUrl ? INBOX_NAV_TIMEOUT_WITH_FALLBACK_MS : INBOX_NAV_TIMEOUT_MS,
+            )
+          : fallbackUrl ? INBOX_NAV_TIMEOUT_WITH_FALLBACK_MS : INBOX_NAV_TIMEOUT_MS,
       );
     } else if (
       fallbackUrl &&
@@ -515,6 +597,7 @@ async function listInboxThreads(page: Page, max: number): Promise<InboxThreadSum
       lastDiag.inboxLinks === 0 &&
       lastDiag.url !== fallbackUrl
     ) {
+      if (deadline) assertBudget(deadline, MIN_STEP_TIMEOUT_MS, 'inbox');
       attemptedStrategies.push('fallback-cookie');
       console.warn('[scrape-inbox] retrying inbox list at last known thread url', {
         prior_url: lastDiag.url,
@@ -522,8 +605,15 @@ async function listInboxThreads(page: Page, max: number): Promise<InboxThreadSum
         prior_inbox_links: lastDiag.inboxLinks,
         fallback_path: new URL(fallbackUrl).pathname,
       });
-      await gotoInbox(page, fallbackUrl, INBOX_RETRY_READY_TIMEOUT_MS);
+      await gotoInbox(
+        page,
+        fallbackUrl,
+        deadline
+          ? boundedTimeoutMs(deadline, INBOX_RETRY_READY_TIMEOUT_MS)
+          : INBOX_RETRY_READY_TIMEOUT_MS,
+      );
     } else {
+      if (deadline) assertBudget(deadline, MIN_STEP_TIMEOUT_MS, 'inbox');
       attemptedStrategies.push('reload');
       console.warn('[scrape-inbox] retrying inbox list after unloaded sidebar', {
         prior_url: lastDiag?.url,
@@ -531,7 +621,10 @@ async function listInboxThreads(page: Page, max: number): Promise<InboxThreadSum
         prior_inbox_links: lastDiag?.inboxLinks,
       });
       const reloadError = await page
-        .reload({ waitUntil: 'domcontentloaded', timeout: 30_000 })
+        .reload({
+          waitUntil: 'domcontentloaded',
+          timeout: deadline ? boundedTimeoutMs(deadline, 30_000) : 30_000,
+        })
         .then(() => null)
         .catch((err) => err);
       if (reloadError) {
@@ -545,15 +638,25 @@ async function listInboxThreads(page: Page, max: number): Promise<InboxThreadSum
     // Wait for actual rows or an explicit empty state; loader disappearance
     // alone is not enough because we observed production returning a bare
     // shell (`Messages` + loader) that would otherwise be mistaken for success.
+    if (deadline) assertBudget(deadline, MIN_STEP_TIMEOUT_MS, 'inbox');
     await waitForInboxRowsOrEmpty(
       page,
-      attempt === 1
-        ? fallbackUrl
-          ? INBOX_READY_TIMEOUT_WITH_FALLBACK_MS
-          : INBOX_READY_TIMEOUT_MS
-        : INBOX_RETRY_READY_TIMEOUT_MS,
+      deadline
+        ? boundedTimeoutMs(
+            deadline,
+            attempt === 1
+              ? fallbackUrl
+                ? INBOX_READY_TIMEOUT_WITH_FALLBACK_MS
+                : INBOX_READY_TIMEOUT_MS
+              : INBOX_RETRY_READY_TIMEOUT_MS,
+          )
+        : attempt === 1
+          ? fallbackUrl
+            ? INBOX_READY_TIMEOUT_WITH_FALLBACK_MS
+            : INBOX_READY_TIMEOUT_MS
+          : INBOX_RETRY_READY_TIMEOUT_MS,
     );
-    await page.waitForTimeout(1500);
+    await page.waitForTimeout(deadline ? Math.min(1500, boundedTimeoutMs(deadline, 1500)) : 1500);
 
     lastDiag = await collectInboxDiag(page);
     logInboxDiag(lastDiag);
@@ -605,10 +708,20 @@ async function readThread(
   page: Page,
   threadId: string,
   msgLimit: number,
+  deadline?: ScrapeDeadline,
 ): Promise<ParsedGroup[]> {
-  await gotoMessagesUrl(page, `${AIRBNB_MESSAGES_URL}/${threadId}`, 'thread', THREAD_NAV_TIMEOUT_MS);
+  if (deadline) assertBudget(deadline, MIN_STEP_TIMEOUT_MS, 'thread_nav');
+  await gotoMessagesUrl(
+    page,
+    `${AIRBNB_MESSAGES_URL}/${threadId}`,
+    'thread',
+    deadline ? boundedTimeoutMs(deadline, THREAD_NAV_TIMEOUT_MS) : THREAD_NAV_TIMEOUT_MS,
+  );
+  if (deadline) assertBudget(deadline, MIN_STEP_TIMEOUT_MS, 'thread_ready');
   const ready = await page
-    .waitForSelector('[data-testid="message-list"]', { timeout: THREAD_READY_TIMEOUT_MS })
+    .waitForSelector('[data-testid="message-list"]', {
+      timeout: deadline ? boundedTimeoutMs(deadline, THREAD_READY_TIMEOUT_MS) : THREAD_READY_TIMEOUT_MS,
+    })
     .then(() => true)
     .catch(() => false);
   if (!ready) {
@@ -716,6 +829,15 @@ export async function scrapeInbox(
   errors: string[];
 }> {
   const budget = budgetFor(opts.mode);
+  if (typeof opts.timeBudgetMs === 'number') {
+    budget.maxRuntimeMs = Math.max(0, opts.timeBudgetMs);
+  }
+  const nowMs = opts.nowMs ?? (() => performance.now());
+  const deadline: ScrapeDeadline = {
+    startedAtMs: nowMs(),
+    maxRuntimeMs: budget.maxRuntimeMs,
+    nowMs,
+  };
   const errors: string[] = [];
   const out: ScrapedMessage[] = [];
 
@@ -723,13 +845,39 @@ export async function scrapeInbox(
   try {
     let threads: InboxThreadSummary[] = [];
     try {
-      threads = await listInboxThreads(page, budget.maxThreads);
+      assertBudget(deadline, MIN_STEP_TIMEOUT_MS, 'inbox');
+      threads = await listInboxThreads(page, budget.maxThreads, deadline);
     } catch (err) {
+      if (err instanceof SyncTimeBudgetExhaustedError) {
+        errors.push(
+          formatBudgetExhaustedError({
+            mode: opts.mode,
+            phase: err.phase,
+            threadsRead: 0,
+            threadsTotal: 0,
+            elapsedMs: elapsedBudgetMs(deadline),
+          }),
+        );
+        return { messages: out, bookingsFound: 0, errors };
+      }
       errors.push(`inbox_list_failed: ${err instanceof Error ? err.message : String(err)}`);
       return { messages: out, bookingsFound: 0, errors };
     }
 
+    let threadsRead = 0;
     for (const thread of threads) {
+      if (remainingBudgetMs(deadline) < budget.threadReserveMs) {
+        errors.push(
+          formatBudgetExhaustedError({
+            mode: opts.mode,
+            phase: 'thread_loop',
+            threadsRead,
+            threadsTotal: threads.length,
+            elapsedMs: elapsedBudgetMs(deadline),
+          }),
+        );
+        break;
+      }
       const threadId = thread.threadId;
       let threadPage: Page | null = null;
       try {
@@ -737,7 +885,13 @@ export async function scrapeInbox(
         // thread from being parsed under a new thread id after an Airbnb SPA
         // navigation timeout.
         threadPage = await ctx.newPage();
-        const groups = await readThread(threadPage, threadId, budget.maxMessagesPerThread);
+        const groups = await readThread(
+          threadPage,
+          threadId,
+          budget.maxMessagesPerThread,
+          deadline,
+        );
+        threadsRead += 1;
         for (const g of groups) {
           if (g.senderType === 'system') continue; // Airbnb-service messages are noise for now.
           const sender: 'guest' | 'host' =
@@ -757,6 +911,18 @@ export async function scrapeInbox(
           });
         }
       } catch (err) {
+        if (err instanceof SyncTimeBudgetExhaustedError) {
+          errors.push(
+            formatBudgetExhaustedError({
+              mode: opts.mode,
+              phase: err.phase,
+              threadsRead,
+              threadsTotal: threads.length,
+              elapsedMs: elapsedBudgetMs(deadline),
+            }),
+          );
+          break;
+        }
         errors.push(
           `thread_${threadId}_failed: ${err instanceof Error ? err.message : String(err)}`,
         );
@@ -778,4 +944,5 @@ export const __scrapeInboxTestHooks = {
   hasReachedMessagesTarget,
   isExplicitEmptyInboxText,
   listInboxThreads,
+  budgetFor,
 };
