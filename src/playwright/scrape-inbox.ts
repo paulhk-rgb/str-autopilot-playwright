@@ -423,24 +423,37 @@ async function readLastKnownMessagesUrl(page: Page): Promise<string | null> {
   return null;
 }
 
-async function gotoInbox(page: Page, url = AIRBNB_MESSAGES_URL): Promise<void> {
+function isNavigationTimeout(err: unknown): boolean {
+  const errorText = err instanceof Error ? err.message : String(err);
+  return /Timeout \d+ms exceeded|TimeoutError/i.test(errorText);
+}
+
+async function gotoMessagesUrl(
+  page: Page,
+  url: string,
+  label: 'inbox' | 'thread',
+  timeoutMs = 30_000,
+): Promise<void> {
   try {
     await page.goto(url, {
       waitUntil: 'domcontentloaded',
-      timeout: 30_000,
+      timeout: timeoutMs,
     });
   } catch (err) {
     const currentUrl = page.url();
     const errorText = err instanceof Error ? err.message : String(err);
-    const isTimeout = /Timeout \d+ms exceeded|TimeoutError/i.test(errorText);
-    if (!isTimeout || !/\/hosting\/messages(?:\/|$|\?)/.test(currentUrl)) {
+    if (!isNavigationTimeout(err) || !/\/hosting\/messages(?:\/|$|\?)/.test(currentUrl)) {
       throw err;
     }
-    console.warn('[scrape-inbox] inbox navigation timed out after reaching messages page', {
+    console.warn(`[scrape-inbox] ${label} navigation timed out after reaching messages page`, {
       url: currentUrl,
       error: errorText,
     });
   }
+}
+
+async function gotoInbox(page: Page, url = AIRBNB_MESSAGES_URL): Promise<void> {
+  await gotoMessagesUrl(page, url, 'inbox');
 }
 
 async function listInboxThreads(page: Page, max: number): Promise<InboxThreadSummary[]> {
@@ -543,10 +556,7 @@ async function readThread(
   threadId: string,
   msgLimit: number,
 ): Promise<ParsedGroup[]> {
-  await page.goto(`https://www.airbnb.com/hosting/messages/${threadId}`, {
-    waitUntil: 'domcontentloaded',
-    timeout: 30_000,
-  });
+  await gotoMessagesUrl(page, `${AIRBNB_MESSAGES_URL}/${threadId}`, 'thread', 12_000);
   const ready = await page
     .waitForSelector('[data-testid="message-list"]', { timeout: 12_000 })
     .then(() => true)
@@ -713,6 +723,7 @@ export async function scrapeInbox(
 export const __scrapeInboxTestHooks = {
   extractConcreteMessagesUrlFromCookieValue,
   parseInboxThreadSummary,
+  readThread,
   isExplicitEmptyInboxText,
   listInboxThreads,
 };

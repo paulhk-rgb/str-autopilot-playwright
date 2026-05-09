@@ -7,6 +7,7 @@ const {
   isExplicitEmptyInboxText,
   listInboxThreads,
   parseInboxThreadSummary,
+  readThread,
 } =
   __scrapeInboxTestHooks;
 
@@ -129,6 +130,20 @@ function makeFakeInboxPage(input: {
   return page;
 }
 
+function evaluateWithDocument<T, Args extends unknown[]>(
+  doc: unknown,
+  fn: (...args: Args) => T,
+  args: Args,
+): T {
+  const prevDocument = (globalThis as unknown as { document?: unknown }).document;
+  (globalThis as unknown as { document?: unknown }).document = doc;
+  try {
+    return fn(...args);
+  } finally {
+    (globalThis as unknown as { document?: unknown }).document = prevDocument;
+  }
+}
+
 describe('scrape-inbox sidebar metadata parser', () => {
   const now = new Date('2026-05-09T12:00:00.000Z');
 
@@ -203,6 +218,43 @@ describe('scrape-inbox sidebar metadata parser', () => {
     await expect(listInboxThreads(page as never, 10)).rejects.toThrow(
       /ERR_INTERNET_DISCONNECTED/,
     );
+  });
+
+  it('continues reading a thread after a navigation timeout when messages rendered', async () => {
+    const threadUrl = 'https://www.airbnb.com/hosting/messages/2470285483';
+    const group = {
+      getAttribute: (name: string) =>
+        name === 'aria-label'
+          ? 'Stuart sent Thanks again. Sent Today at 9:00 AM.'
+          : null,
+      querySelector: (selector: string) =>
+        selector === 'h2' ? { textContent: 'Today' } : null,
+    };
+    const doc = {
+      querySelectorAll: (selector: string) =>
+        selector === '[data-testid="message-list"] > div[role="group"]' ? [group] : [],
+    };
+    const page = {
+      goto: async () => {
+        throw new Error('page.goto: Timeout 12000ms exceeded');
+      },
+      url: () => threadUrl,
+      waitForSelector: async () => undefined,
+      reload: async () => {
+        throw new Error('reload should not be needed');
+      },
+      evaluate: async <T, Args extends unknown[]>(fn: (...args: Args) => T, ...args: Args) =>
+        evaluateWithDocument(doc, fn, args),
+    };
+
+    await expect(readThread(page as never, '2470285483', 20)).resolves.toMatchObject([
+      {
+        senderName: 'Stuart',
+        text: 'Thanks again',
+        timestamp: 'Today at 9:00 AM',
+        dateHeading: 'Today',
+      },
+    ]);
   });
 
   it('handles cross-month stays and strips action/status noise', () => {
