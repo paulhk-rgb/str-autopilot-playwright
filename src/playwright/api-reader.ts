@@ -104,7 +104,7 @@ export interface InboxDiagnostics {
   threadsDroppedHostMembership: number;
   inboxHashUsed: string;
   schemaFingerprintOk: boolean;
-  failureKind?: 'auth_http' | 'http_error' | 'non_json' | 'evaluate_error' | 'graphql_errors';
+  failureKind?: 'auth_http' | 'http_error' | 'non_json' | 'request_error' | 'graphql_errors';
   httpStatus?: number;
   graphqlErrorCodes?: string[];
 }
@@ -364,6 +364,86 @@ export function buildApolloHeaders(opts: {
   };
 }
 
+type ApiFetchOutcome =
+  | { kind: 'json'; body: unknown }
+  | { kind: 'auth_http'; status: number }
+  | { kind: 'http_error'; status: number; bodyText?: string }
+  | { kind: 'non_json'; status: number }
+  | { kind: 'request_error' };
+
+interface ApiResponseLike {
+  status(): number;
+  text(): Promise<string>;
+}
+
+interface ContextRequestLike {
+  get(url: string, opts: { headers: Record<string, string> }): Promise<ApiResponseLike>;
+}
+
+interface PageWithRequestContext {
+  context?: () => { request?: ContextRequestLike };
+  evaluate: Page['evaluate'];
+}
+
+function classifyApiResponse(status: number, text: string): ApiFetchOutcome {
+  if (status === 401 || status === 403) {
+    return { kind: 'auth_http', status };
+  }
+  if (status < 200 || status >= 300) {
+    return { kind: 'http_error', status, bodyText: text.slice(0, 1024) };
+  }
+  try {
+    return { kind: 'json', body: JSON.parse(text) };
+  } catch {
+    return { kind: 'non_json', status };
+  }
+}
+
+async function fetchAirbnbApi(
+  page: Page,
+  url: string,
+  headers: Record<string, string>,
+): Promise<ApiFetchOutcome> {
+  const withContext = page as unknown as PageWithRequestContext;
+  const request = typeof withContext.context === 'function'
+    ? withContext.context()?.request
+    : undefined;
+
+  if (request && typeof request.get === 'function') {
+    try {
+      const res = await request.get(url, { headers });
+      const text = await res.text().catch(() => '');
+      return classifyApiResponse(res.status(), text);
+    } catch {
+      return { kind: 'request_error' };
+    }
+  }
+
+  try {
+    return (await page.evaluate(
+      async ({ url, headers }) => {
+        const res = await fetch(url, { headers, credentials: 'include' });
+        const status = res.status;
+        const text = await res.text().catch(() => '');
+        if (status === 401 || status === 403) {
+          return { kind: 'auth_http', status };
+        }
+        if (status < 200 || status >= 300) {
+          return { kind: 'http_error', status, bodyText: text.slice(0, 1024) };
+        }
+        try {
+          return { kind: 'json', body: JSON.parse(text) };
+        } catch {
+          return { kind: 'non_json', status };
+        }
+      },
+      { url, headers },
+    )) as ApiFetchOutcome;
+  } catch {
+    return { kind: 'request_error' };
+  }
+}
+
 /**
  * Build the URL for a `ViaductInboxData` GET request.
  * Variables match the full set per spec §3 Operation A.
@@ -442,41 +522,12 @@ export async function listInboxViaApi(
     ...extra,
   });
 
-  type FetchOutcome =
-    | { kind: 'json'; body: unknown }
-    | { kind: 'auth_http'; status: number } // 401, 403
-    | { kind: 'http_error'; status: number; bodyText?: string } // other non-2xx
-    | { kind: 'non_json'; status: number }; // 2xx with HTML/text body (e.g. challenge)
-
-  let outcome: FetchOutcome;
-  try {
-    outcome = (await page.evaluate(
-      async ({ url, headers }) => {
-        const res = await fetch(url, { headers, credentials: 'include' });
-        const status = res.status;
-        if (status === 401 || status === 403) {
-          return { kind: 'auth_http', status };
-        }
-        if (status < 200 || status >= 300) {
-          // Capture response body for 404 PQNF detection (mirrors readThreadViaApi).
-          // Cap at 1024 chars per hard rule (no full body logging).
-          const text = await res.text().catch(() => '');
-          return { kind: 'http_error', status, bodyText: text.slice(0, 1024) };
-        }
-        const text = await res.text();
-        try {
-          return { kind: 'json', body: JSON.parse(text) };
-        } catch {
-          return { kind: 'non_json', status };
-        }
-      },
-      { url, headers },
-    )) as FetchOutcome;
-  } catch {
+  const outcome = await fetchAirbnbApi(page, url, headers);
+  if (outcome.kind === 'request_error') {
     return {
       ok: false,
       reason: 'http_error',
-      diagnostics: emptyDiag({ failureKind: 'evaluate_error' }),
+      diagnostics: emptyDiag({ failureKind: 'request_error' }),
     };
   }
 
@@ -1108,39 +1159,8 @@ export async function readThreadViaApi(
       earliestCursor: cursor,
     });
 
-    type FetchOutcome =
-      | { kind: 'json'; body: unknown }
-      | { kind: 'auth_http'; status: number }
-      | { kind: 'http_error'; status: number; bodyText?: string }
-      | { kind: 'non_json'; status: number };
-
-    let outcome: FetchOutcome;
-    try {
-      outcome = (await page.evaluate(
-        async ({ url, headers }) => {
-          const res = await fetch(url, { headers, credentials: 'include' });
-          const status = res.status;
-          if (status === 401 || status === 403) {
-            return { kind: 'auth_http', status };
-          }
-          if (status < 200 || status >= 300) {
-            // Capture body for 404 PQNF detection (spec §4 failure modes:
-            // PERSISTED_QUERY_NOT_FOUND can come back as 404 OR as 200+errors[]).
-            // Cap body length to keep hard rule "never log full bodies" honored;
-            // we only inspect the prefix for PQNF marker.
-            const text = await res.text().catch(() => '');
-            return { kind: 'http_error', status, bodyText: text.slice(0, 1024) };
-          }
-          const text = await res.text();
-          try {
-            return { kind: 'json', body: JSON.parse(text) };
-          } catch {
-            return { kind: 'non_json', status };
-          }
-        },
-        { url, headers },
-      )) as FetchOutcome;
-    } catch {
+    const outcome = await fetchAirbnbApi(page, url, headers);
+    if (outcome.kind === 'request_error') {
       return makeFailedThreadOutcome('http_error', opts);
     }
 
