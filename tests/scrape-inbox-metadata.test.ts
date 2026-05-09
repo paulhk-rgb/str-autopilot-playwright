@@ -24,6 +24,8 @@ function makeFakeInboxPage(input: {
   loaderPresent?: boolean;
   bodyText?: string;
   sidebarText?: string;
+  gotoError?: Error;
+  url?: string;
 }) {
   const rows = input.rows ?? [];
   const rowElements = rows.map((row) => makeElement(`inbox_list_${row.id}`, row.text));
@@ -60,7 +62,10 @@ function makeFakeInboxPage(input: {
   };
   const page = {
     reloads: 0,
-    goto: async () => undefined,
+    goto: async () => {
+      if (input.gotoError) throw input.gotoError;
+    },
+    url: () => input.url ?? 'https://www.airbnb.com/hosting/messages',
     reload: async () => {
       page.reloads += 1;
     },
@@ -73,7 +78,7 @@ function makeFakeInboxPage(input: {
       const prevLocation = (globalThis as unknown as { location?: unknown }).location;
       (globalThis as unknown as { document?: unknown }).document = doc;
       (globalThis as unknown as { location?: unknown }).location = {
-        href: 'https://www.airbnb.com/hosting/messages',
+        href: page.url(),
       };
       try {
         return fn(...args);
@@ -124,6 +129,31 @@ describe('scrape-inbox sidebar metadata parser', () => {
     expect(parsed.checkIn).toBe('2026-05-07');
     expect(parsed.checkOut).toBe('2026-05-10');
     expect(parsed.stayText).toBe('May 7 – 10');
+  });
+
+  it('continues after a goto timeout when Airbnb has already rendered messages', async () => {
+    const page = makeFakeInboxPage({
+      gotoError: new Error('page.goto: Timeout 30000ms exceeded'),
+      url: 'https://www.airbnb.com/hosting/messages/2470285483',
+      rows: [
+        {
+          id: '2470285483',
+          text: [
+            'Stuart',
+            'Currently hosting · May 7, 2026 – May 10, 2026 · One Bedroom Private Unit .3 Miles from Commons',
+          ].join('\n'),
+        },
+      ],
+    });
+
+    await expect(listInboxThreads(page as never, 10)).resolves.toMatchObject([
+      {
+        threadId: '2470285483',
+        guestName: 'Stuart',
+        checkIn: '2026-05-07',
+        checkOut: '2026-05-10',
+      },
+    ]);
   });
 
   it('handles cross-month stays and strips action/status noise', () => {

@@ -375,15 +375,30 @@ function logInboxDiag(diag: InboxPageDiag): void {
   (globalThis as unknown as { __lastInboxDiag?: unknown }).__lastInboxDiag = diag;
 }
 
+async function gotoInbox(page: Page): Promise<void> {
+  try {
+    await page.goto('https://www.airbnb.com/hosting/messages', {
+      waitUntil: 'domcontentloaded',
+      timeout: 30_000,
+    });
+  } catch (err) {
+    const currentUrl = page.url();
+    if (!/\/hosting\/messages(?:\/|$|\?)/.test(currentUrl)) {
+      throw err;
+    }
+    console.warn('[scrape-inbox] inbox navigation timed out after reaching messages page', {
+      url: currentUrl,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
 async function listInboxThreads(page: Page, max: number): Promise<InboxThreadSummary[]> {
   let lastDiag: InboxPageDiag | null = null;
 
   for (let attempt = 1; attempt <= 2; attempt++) {
     if (attempt === 1) {
-      await page.goto('https://www.airbnb.com/hosting/messages', {
-        waitUntil: 'domcontentloaded',
-        timeout: 30_000,
-      });
+      await gotoInbox(page);
     } else {
       console.warn('[scrape-inbox] retrying inbox list after unloaded sidebar', {
         prior_url: lastDiag?.url,
