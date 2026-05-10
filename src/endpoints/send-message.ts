@@ -43,6 +43,7 @@ const REDACTED_PLACEHOLDER_PATTERN =
   /(?:\[(?:REDACTED|PRIVATE|TOKEN|SECRET)[^\]]*\]|<\s*(?:REDACTED|PRIVATE|TOKEN|SECRET)[^>]*>|\{\{\s*(?:REDACTED|PRIVATE|TOKEN|SECRET)[^}]*\}\}|\b(?:REDACTED|PRIVATE|TOKEN|SECRET)_[A-Z0-9_]+\b)/i;
 const SCENARIO_PATTERN = /\b(?:HMSCEN[A-Z0-9]*|TEST RESERVATION|FAKE RESERVATION)\b/i;
 const CANONICAL_AIRBNB_MESSAGE_ID_RE = /^airbnb-\d+$/;
+const MAX_CANONICAL_AIRBNB_MESSAGE_ID_LENGTH = 128;
 const SEND_LEDGER_TTL_MS = 60 * 60_000;
 
 interface SendLedgerEntry {
@@ -75,6 +76,7 @@ function hasUnsafeMarker(value: string | null | undefined): boolean {
 
 function canonicalAirbnbMessageId(value: string | null | undefined): string | undefined {
   if (!value) return undefined;
+  if (value.length > MAX_CANONICAL_AIRBNB_MESSAGE_ID_LENGTH) return undefined;
   return CANONICAL_AIRBNB_MESSAGE_ID_RE.test(value) ? value : undefined;
 }
 
@@ -154,7 +156,7 @@ function parseLedgerEntry(raw: unknown): SendLedgerEntry | null {
     entry.externalMessageId !== undefined &&
     (
       typeof entry.externalMessageId !== 'string' ||
-      !CANONICAL_AIRBNB_MESSAGE_ID_RE.test(entry.externalMessageId)
+      !canonicalAirbnbMessageId(entry.externalMessageId)
     )
   ) {
     delete entry.externalMessageId;
@@ -278,6 +280,7 @@ async function handleSendResult(
         ok: true,
         status: 'callback_failed_after_send',
         do_not_retry_browser_send: true,
+        ...(externalMessageId ? { external_message_id: externalMessageId } : {}),
       });
     }
 
@@ -345,6 +348,7 @@ async function handleLedgerDuplicate(env: MachineEnv, body: SendMessageBody, ent
           status: 'callback_failed_after_send',
           duplicate_suppressed: true,
           do_not_retry_browser_send: true,
+          ...(entry.externalMessageId ? { external_message_id: entry.externalMessageId } : {}),
         });
       }
     }
