@@ -104,6 +104,17 @@ beforeEach(async () => {
 });
 
 describe('send-message endpoint guards', () => {
+  it('accepts only canonical native Airbnb message ids within the length cap', () => {
+    const maxLengthId = `airbnb-${'1'.repeat(121)}`;
+    const overLengthId = `airbnb-${'1'.repeat(122)}`;
+
+    expect(maxLengthId).toHaveLength(128);
+    expect(overLengthId).toHaveLength(129);
+    expect(__sendMessageEndpointTestHooks.canonicalAirbnbMessageId(maxLengthId)).toBe(maxLengthId);
+    expect(__sendMessageEndpointTestHooks.canonicalAirbnbMessageId(overLengthId)).toBeUndefined();
+    expect(__sendMessageEndpointTestHooks.canonicalAirbnbMessageId('thread-123456789')).toBeUndefined();
+  });
+
   it('rejects malformed and scenario bodies before browser work', async () => {
     expect(
       __sendMessageEndpointTestHooks.isValidBody(validBody({ message: 'HMSCEN666EPC test reservation' })),
@@ -254,6 +265,43 @@ describe('send-message endpoint guards', () => {
     });
   });
 
+  it('preserves a canonical native Airbnb message id when the confirmed callback fails', async () => {
+    vi.mocked(senderModule.sendAirbnbMessage).mockResolvedValueOnce({
+      status: 'confirmed',
+      external_message_id: 'airbnb-123456789',
+    });
+    vi.mocked(callbackModule.postCallback).mockRejectedValueOnce(new Error('callback down'));
+    const { req, res, statusSpy, jsonSpy } = buildReqRes(validBody());
+
+    await sendMessageHandler(env)(req, res);
+
+    expect(statusSpy).toHaveBeenCalledWith(202);
+    expect(jsonSpy).toHaveBeenCalledWith({
+      ok: true,
+      status: 'callback_failed_after_send',
+      do_not_retry_browser_send: true,
+      external_message_id: 'airbnb-123456789',
+    });
+  });
+
+  it('omits a non-canonical native id when the confirmed callback fails', async () => {
+    vi.mocked(senderModule.sendAirbnbMessage).mockResolvedValueOnce({
+      status: 'confirmed',
+      external_message_id: 'airbnb-' + '1'.repeat(129),
+    });
+    vi.mocked(callbackModule.postCallback).mockRejectedValueOnce(new Error('callback down'));
+    const { req, res, statusSpy, jsonSpy } = buildReqRes(validBody());
+
+    await sendMessageHandler(env)(req, res);
+
+    expect(statusSpy).toHaveBeenCalledWith(202);
+    expect(jsonSpy).toHaveBeenCalledWith({
+      ok: true,
+      status: 'callback_failed_after_send',
+      do_not_retry_browser_send: true,
+    });
+  });
+
   it('retries only the callback after a confirmed send callback failure', async () => {
     vi.mocked(callbackModule.postCallback)
       .mockRejectedValueOnce(new Error('callback down'))
@@ -316,6 +364,36 @@ describe('send-message endpoint guards', () => {
     });
   });
 
+  it('preserves a canonical native Airbnb message id when duplicate callback retry still fails', async () => {
+    const ledgerDir = path.join(env.PROFILE_DIR, 'send-message-ledger');
+    await mkdir(ledgerDir, { recursive: true });
+    await writeFile(
+      path.join(ledgerDir, `${HOST_ID}_${MESSAGE_ID}.json`),
+      JSON.stringify({
+        key: `${HOST_ID}:${MESSAGE_ID}`,
+        createdAtMs: Date.now(),
+        status: 'browser_confirmed',
+        callbackDelivered: false,
+        externalMessageId: 'airbnb-987654321',
+      }),
+      'utf8',
+    );
+    vi.mocked(callbackModule.postCallback).mockRejectedValueOnce(new Error('callback down'));
+
+    const { req, res, statusSpy, jsonSpy } = buildReqRes(validBody());
+    await sendMessageHandler(env)(req, res);
+
+    expect(senderModule.sendAirbnbMessage).not.toHaveBeenCalled();
+    expect(statusSpy).toHaveBeenCalledWith(202);
+    expect(jsonSpy).toHaveBeenCalledWith({
+      ok: true,
+      status: 'callback_failed_after_send',
+      duplicate_suppressed: true,
+      do_not_retry_browser_send: true,
+      external_message_id: 'airbnb-987654321',
+    });
+  });
+
   it('drops malformed external ids from a persisted confirmed ledger entry', async () => {
     const ledgerDir = path.join(env.PROFILE_DIR, 'send-message-ledger');
     await mkdir(ledgerDir, { recursive: true });
@@ -327,6 +405,40 @@ describe('send-message endpoint guards', () => {
         status: 'browser_confirmed',
         callbackDelivered: false,
         externalMessageId: 'thread-123456789',
+      }),
+      'utf8',
+    );
+
+    const { req, res, statusSpy, jsonSpy } = buildReqRes(validBody());
+    await sendMessageHandler(env)(req, res);
+
+    expect(senderModule.sendAirbnbMessage).not.toHaveBeenCalled();
+    expect(callbackModule.postCallback).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: expect.not.objectContaining({
+          external_message_id: expect.anything(),
+        }),
+      }),
+    );
+    expect(statusSpy).toHaveBeenCalledWith(200);
+    expect(jsonSpy).toHaveBeenCalledWith({
+      ok: true,
+      status: 'confirmed',
+      duplicate_suppressed: true,
+    });
+  });
+
+  it('drops overlong external ids from a persisted confirmed ledger entry', async () => {
+    const ledgerDir = path.join(env.PROFILE_DIR, 'send-message-ledger');
+    await mkdir(ledgerDir, { recursive: true });
+    await writeFile(
+      path.join(ledgerDir, `${HOST_ID}_${MESSAGE_ID}.json`),
+      JSON.stringify({
+        key: `${HOST_ID}:${MESSAGE_ID}`,
+        createdAtMs: Date.now(),
+        status: 'browser_confirmed',
+        callbackDelivered: false,
+        externalMessageId: `airbnb-${'1'.repeat(122)}`,
       }),
       'utf8',
     );
