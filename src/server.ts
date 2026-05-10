@@ -15,6 +15,7 @@ import { syncHandler } from './endpoints/sync';
 import { scrapeReviewHandler } from './endpoints/scrape-review';
 import { scrapeReservationListHandler } from './endpoints/scrape-reservation-list';
 import { scrapeReservationDetailsHandler } from './endpoints/scrape-reservation-details';
+import { sendMessageHandler } from './endpoints/send-message';
 import { closeBrowserContext } from './playwright/browser';
 
 function buildApp(env: ReturnType<typeof readEnv>) {
@@ -67,6 +68,7 @@ function buildApp(env: ReturnType<typeof readEnv>) {
   app.post('/scrape-review', hmacAuth, scrapeReviewHandler(env));
   app.post('/scrape-reservation-list', hmacAuth, scrapeReservationListHandler(env));
   app.post('/scrape-reservation-details', hmacAuth, scrapeReservationDetailsHandler(env));
+  app.post('/send-message', hmacAuth, sendMessageHandler(env));
 
   // 404 for anything else — Fly's private-network layer already drops public traffic.
   app.use((_req, res) => {
