@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Request, Response } from 'express';
+import { mkdir, writeFile } from 'node:fs/promises';
+import path from 'node:path';
 import type { MachineEnv } from '../src/lib/env';
 
 vi.mock('../src/playwright/browser', () => ({
@@ -191,6 +193,53 @@ describe('send-message endpoint guards', () => {
     expect(jsonSpy).toHaveBeenCalledWith({ ok: true, status: 'confirmed' });
   });
 
+  it('includes a canonical native Airbnb message id on confirmed callbacks when supplied', async () => {
+    vi.mocked(senderModule.sendAirbnbMessage).mockResolvedValueOnce({
+      status: 'confirmed',
+      external_message_id: 'airbnb-123456789',
+    });
+    const { req, res, statusSpy, jsonSpy } = buildReqRes(validBody());
+
+    await sendMessageHandler(env)(req, res);
+
+    expect(callbackModule.postCallback).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: expect.objectContaining({
+          action: 'send_result',
+          message_id: MESSAGE_ID,
+          status: 'confirmed',
+          external_message_id: 'airbnb-123456789',
+        }),
+      }),
+    );
+    expect(statusSpy).toHaveBeenCalledWith(200);
+    expect(jsonSpy).toHaveBeenCalledWith({
+      ok: true,
+      status: 'confirmed',
+      external_message_id: 'airbnb-123456789',
+    });
+  });
+
+  it('does not post non-canonical native ids even when a sender result includes one', async () => {
+    vi.mocked(senderModule.sendAirbnbMessage).mockResolvedValueOnce({
+      status: 'confirmed',
+      external_message_id: 'thread-123456789',
+    });
+    const { req, res, statusSpy, jsonSpy } = buildReqRes(validBody());
+
+    await sendMessageHandler(env)(req, res);
+
+    expect(callbackModule.postCallback).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: expect.not.objectContaining({
+          external_message_id: expect.anything(),
+        }),
+      }),
+    );
+    expect(statusSpy).toHaveBeenCalledWith(200);
+    expect(jsonSpy).toHaveBeenCalledWith({ ok: true, status: 'confirmed' });
+  });
+
   it('marks confirmed callback failure as non-retryable browser success', async () => {
     vi.mocked(callbackModule.postCallback).mockRejectedValueOnce(new Error('callback down'));
     const { req, res, statusSpy, jsonSpy } = buildReqRes(validBody());
@@ -224,6 +273,111 @@ describe('send-message endpoint guards', () => {
     expect(callbackModule.postCallback).toHaveBeenCalledTimes(2);
     expect(second.statusSpy).toHaveBeenCalledWith(200);
     expect(second.jsonSpy).toHaveBeenCalledWith({
+      ok: true,
+      status: 'confirmed',
+      duplicate_suppressed: true,
+    });
+  });
+
+  it('preserves a canonical native Airbnb message id when retrying only the callback', async () => {
+    vi.mocked(senderModule.sendAirbnbMessage).mockResolvedValueOnce({
+      status: 'confirmed',
+      external_message_id: 'airbnb-987654321',
+    });
+    vi.mocked(callbackModule.postCallback)
+      .mockRejectedValueOnce(new Error('callback down'))
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        bodyText: '{}',
+      });
+
+    const first = buildReqRes(validBody());
+    await sendMessageHandler(env)(first.req, first.res);
+
+    const second = buildReqRes(validBody());
+    await sendMessageHandler(env)(second.req, second.res);
+
+    expect(senderModule.sendAirbnbMessage).toHaveBeenCalledTimes(1);
+    expect(callbackModule.postCallback).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        body: expect.objectContaining({
+          status: 'confirmed',
+          external_message_id: 'airbnb-987654321',
+        }),
+      }),
+    );
+    expect(second.statusSpy).toHaveBeenCalledWith(200);
+    expect(second.jsonSpy).toHaveBeenCalledWith({
+      ok: true,
+      status: 'confirmed',
+      duplicate_suppressed: true,
+      external_message_id: 'airbnb-987654321',
+    });
+  });
+
+  it('drops malformed external ids from a persisted confirmed ledger entry', async () => {
+    const ledgerDir = path.join(env.PROFILE_DIR, 'send-message-ledger');
+    await mkdir(ledgerDir, { recursive: true });
+    await writeFile(
+      path.join(ledgerDir, `${HOST_ID}_${MESSAGE_ID}.json`),
+      JSON.stringify({
+        key: `${HOST_ID}:${MESSAGE_ID}`,
+        createdAtMs: Date.now(),
+        status: 'browser_confirmed',
+        callbackDelivered: false,
+        externalMessageId: 'thread-123456789',
+      }),
+      'utf8',
+    );
+
+    const { req, res, statusSpy, jsonSpy } = buildReqRes(validBody());
+    await sendMessageHandler(env)(req, res);
+
+    expect(senderModule.sendAirbnbMessage).not.toHaveBeenCalled();
+    expect(callbackModule.postCallback).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: expect.not.objectContaining({
+          external_message_id: expect.anything(),
+        }),
+      }),
+    );
+    expect(statusSpy).toHaveBeenCalledWith(200);
+    expect(jsonSpy).toHaveBeenCalledWith({
+      ok: true,
+      status: 'confirmed',
+      duplicate_suppressed: true,
+    });
+  });
+
+  it('preserves duplicate suppression when a persisted external id has the wrong type', async () => {
+    const ledgerDir = path.join(env.PROFILE_DIR, 'send-message-ledger');
+    await mkdir(ledgerDir, { recursive: true });
+    await writeFile(
+      path.join(ledgerDir, `${HOST_ID}_${MESSAGE_ID}.json`),
+      JSON.stringify({
+        key: `${HOST_ID}:${MESSAGE_ID}`,
+        createdAtMs: Date.now(),
+        status: 'browser_confirmed',
+        callbackDelivered: false,
+        externalMessageId: { bad: true },
+      }),
+      'utf8',
+    );
+
+    const { req, res, statusSpy, jsonSpy } = buildReqRes(validBody());
+    await sendMessageHandler(env)(req, res);
+
+    expect(senderModule.sendAirbnbMessage).not.toHaveBeenCalled();
+    expect(callbackModule.postCallback).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: expect.not.objectContaining({
+          external_message_id: expect.anything(),
+        }),
+      }),
+    );
+    expect(statusSpy).toHaveBeenCalledWith(200);
+    expect(jsonSpy).toHaveBeenCalledWith({
       ok: true,
       status: 'confirmed',
       duplicate_suppressed: true,

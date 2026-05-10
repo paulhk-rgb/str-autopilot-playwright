@@ -42,6 +42,7 @@ const SHA256_RE = /^[0-9a-f]{64}$/i;
 const REDACTED_PLACEHOLDER_PATTERN =
   /(?:\[(?:REDACTED|PRIVATE|TOKEN|SECRET)[^\]]*\]|<\s*(?:REDACTED|PRIVATE|TOKEN|SECRET)[^>]*>|\{\{\s*(?:REDACTED|PRIVATE|TOKEN|SECRET)[^}]*\}\}|\b(?:REDACTED|PRIVATE|TOKEN|SECRET)_[A-Z0-9_]+\b)/i;
 const SCENARIO_PATTERN = /\b(?:HMSCEN[A-Z0-9]*|TEST RESERVATION|FAKE RESERVATION)\b/i;
+const CANONICAL_AIRBNB_MESSAGE_ID_RE = /^airbnb-\d+$/;
 const SEND_LEDGER_TTL_MS = 60 * 60_000;
 
 interface SendLedgerEntry {
@@ -49,6 +50,7 @@ interface SendLedgerEntry {
   createdAtMs: number;
   status: 'browser_confirmed' | 'submitted_unconfirmed';
   callbackDelivered: boolean;
+  externalMessageId?: string;
   error?: string;
 }
 
@@ -69,6 +71,11 @@ function isOptionalShortString(value: unknown, maxLength: number): boolean {
 function hasUnsafeMarker(value: string | null | undefined): boolean {
   if (!value) return false;
   return REDACTED_PLACEHOLDER_PATTERN.test(value) || SCENARIO_PATTERN.test(value);
+}
+
+function canonicalAirbnbMessageId(value: string | null | undefined): string | undefined {
+  if (!value) return undefined;
+  return CANONICAL_AIRBNB_MESSAGE_ID_RE.test(value) ? value : undefined;
 }
 
 function isValidBody(body: unknown): body is SendMessageBody {
@@ -143,6 +150,15 @@ function parseLedgerEntry(raw: unknown): SendLedgerEntry | null {
   if (typeof entry.createdAtMs !== 'number') return null;
   if (entry.status !== 'browser_confirmed' && entry.status !== 'submitted_unconfirmed') return null;
   if (typeof entry.callbackDelivered !== 'boolean') return null;
+  if (
+    entry.externalMessageId !== undefined &&
+    (
+      typeof entry.externalMessageId !== 'string' ||
+      !CANONICAL_AIRBNB_MESSAGE_ID_RE.test(entry.externalMessageId)
+    )
+  ) {
+    delete entry.externalMessageId;
+  }
   if (entry.error !== undefined && typeof entry.error !== 'string') return null;
   return entry as SendLedgerEntry;
 }
@@ -207,7 +223,10 @@ async function postSendResultCallback(opts: {
   body: SendMessageBody;
   status: 'confirmed' | 'failed';
   error?: string;
+  externalMessageId?: string;
 }) {
+  const externalMessageId =
+    opts.status === 'confirmed' ? canonicalAirbnbMessageId(opts.externalMessageId) : undefined;
   return postCallback({
     env: opts.env,
     body: {
@@ -215,6 +234,7 @@ async function postSendResultCallback(opts: {
       message_id: opts.body.message_id,
       status: opts.status,
       error: opts.error,
+      ...(externalMessageId ? { external_message_id: externalMessageId } : {}),
       timestamp: new Date().toISOString(),
     },
   });
@@ -237,10 +257,22 @@ async function handleSendResult(
   res: Response,
 ) {
   if (result.status === 'confirmed') {
-    await recordSendLedgerEntry(env, body, { status: 'browser_confirmed', callbackDelivered: false });
+    const externalMessageId = canonicalAirbnbMessageId(result.external_message_id);
+    if (result.external_message_id && !externalMessageId) {
+      console.warn('[send-message] ignored non-canonical external message id');
+    }
+    await recordSendLedgerEntry(env, body, {
+      status: 'browser_confirmed',
+      callbackDelivered: false,
+      ...(externalMessageId ? { externalMessageId } : {}),
+    });
     try {
-      await postSendResultCallback({ env, body, status: 'confirmed' });
-      await recordSendLedgerEntry(env, body, { status: 'browser_confirmed', callbackDelivered: true });
+      await postSendResultCallback({ env, body, status: 'confirmed', externalMessageId });
+      await recordSendLedgerEntry(env, body, {
+        status: 'browser_confirmed',
+        callbackDelivered: true,
+        ...(externalMessageId ? { externalMessageId } : {}),
+      });
     } catch {
       return res.status(202).json({
         ok: true,
@@ -249,7 +281,11 @@ async function handleSendResult(
       });
     }
 
-    return res.status(200).json({ ok: true, status: 'confirmed' });
+    return res.status(200).json({
+      ok: true,
+      status: 'confirmed',
+      ...(externalMessageId ? { external_message_id: externalMessageId } : {}),
+    });
   }
 
   if (result.status === 'submitted_unconfirmed') {
@@ -286,12 +322,22 @@ async function handleLedgerDuplicate(env: MachineEnv, body: SendMessageBody, ent
   if (entry.status === 'browser_confirmed') {
     if (!entry.callbackDelivered) {
       try {
-        await postSendResultCallback({ env, body, status: 'confirmed' });
-        await recordSendLedgerEntry(env, body, { status: 'browser_confirmed', callbackDelivered: true });
+        await postSendResultCallback({
+          env,
+          body,
+          status: 'confirmed',
+          externalMessageId: entry.externalMessageId,
+        });
+        await recordSendLedgerEntry(env, body, {
+          status: 'browser_confirmed',
+          callbackDelivered: true,
+          ...(entry.externalMessageId ? { externalMessageId: entry.externalMessageId } : {}),
+        });
         return res.status(200).json({
           ok: true,
           status: 'confirmed',
           duplicate_suppressed: true,
+          ...(entry.externalMessageId ? { external_message_id: entry.externalMessageId } : {}),
         });
       } catch {
         return res.status(202).json({
@@ -307,6 +353,7 @@ async function handleLedgerDuplicate(env: MachineEnv, body: SendMessageBody, ent
       ok: true,
       status: 'already_confirmed',
       duplicate_suppressed: true,
+      ...(entry.externalMessageId ? { external_message_id: entry.externalMessageId } : {}),
     });
   }
 
@@ -412,6 +459,7 @@ export const __sendMessageEndpointTestHooks = {
   SCENARIO_PATTERN,
   SEND_LEDGER_TTL_MS,
   THREAD_ID_RE,
+  canonicalAirbnbMessageId,
   clearSendLedgerMemoryForTesting,
   getSendLedgerEntry,
   isValidBody,

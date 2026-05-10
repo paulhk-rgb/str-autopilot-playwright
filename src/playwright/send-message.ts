@@ -21,7 +21,7 @@ export interface SendAirbnbMessageInput {
 }
 
 export type SendAirbnbMessageResult =
-  | { status: 'confirmed' }
+  | { status: 'confirmed'; external_message_id?: string }
   | { status: 'failed'; error: SendMessageErrorCode; clicked_send: false }
   | { status: 'submitted_unconfirmed'; error: SendMessageErrorCode; clicked_send: true };
 
