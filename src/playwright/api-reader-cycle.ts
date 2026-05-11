@@ -20,6 +20,7 @@ import {
   type InboxFailureReason,
   type InboxDiagnostics,
   type InboxReaderMode,
+  type InboxThreadRef,
   type ScrapedMessage,
   type ThreadDiagnostics,
   listInboxViaApi,
@@ -46,6 +47,8 @@ export interface CycleOptions {
   interThreadJitterMs?: { minMs: number; maxMs: number };
   watermarkStore: WatermarkStore;
   spa: SpaListener;
+  /** Raw Airbnb thread IDs to read directly instead of listing the inbox. */
+  targetRawThreadIds?: string[];
   /**
    * Shadow comparator. Called per cycle with the API messages we'd emit.
    * Implementation provides the synchronous awaitUiBatchForCycle semantics
@@ -115,6 +118,10 @@ function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+function globalMessageThreadId(rawThreadId: string): string {
+  return Buffer.from(`MessageThread:${rawThreadId}`, 'utf8').toString('base64');
+}
+
 /**
  * Run one inbox-read cycle. Throws on programmer error; returns CycleOutcome
  * for all spec-defined failure paths so the caller can surface diagnostics.
@@ -170,27 +177,41 @@ export async function runApiReaderCycle(
     return finalize({ ...baseOutcome, apiSkipReason: 'no_spa_observation' }, startedAt);
   }
 
-  // 3. Inbox listing.
-  const inboxResult = await listInboxViaApi(page, {
-    mode,
-    hostNumericId: opts.hostNumericId,
-    globalUserId: opts.globalUserId,
-    inboxHash,
-    threadHash,
-    apiKey: opts.apiKey,
-    clientVersion,
-    numRequestedThreads,
-  });
-  if (!inboxResult.ok) {
-    return finalize(
-      {
-        ...baseOutcome,
-        apiSkipReason: 'inbox_failed',
-        inboxFailureReason: inboxResult.reason,
-        inboxDiagnostics: inboxResult.diagnostics,
-      },
-      startedAt,
-    );
+  // 3. Inbox listing, unless the caller supplied explicit raw thread IDs.
+  // Targeted reads construct the standard Relay node ID and let readThreadViaApi
+  // validate both identity and host membership before emitting anything.
+  let threads: InboxThreadRef[];
+  let inboxDiagnostics: InboxDiagnostics | undefined;
+  if (opts.targetRawThreadIds?.length) {
+    threads = opts.targetRawThreadIds.map((rawId) => ({
+      rawId,
+      globalThreadId: globalMessageThreadId(rawId),
+      participantAccountIds: [],
+    }));
+  } else {
+    const inboxResult = await listInboxViaApi(page, {
+      mode,
+      hostNumericId: opts.hostNumericId,
+      globalUserId: opts.globalUserId,
+      inboxHash,
+      threadHash,
+      apiKey: opts.apiKey,
+      clientVersion,
+      numRequestedThreads,
+    });
+    if (!inboxResult.ok) {
+      return finalize(
+        {
+          ...baseOutcome,
+          apiSkipReason: 'inbox_failed',
+          inboxFailureReason: inboxResult.reason,
+          inboxDiagnostics: inboxResult.diagnostics,
+        },
+        startedAt,
+      );
+    }
+    threads = inboxResult.threads;
+    inboxDiagnostics = inboxResult.diagnostics;
   }
 
   // 4. Per-thread sequential fetch + watermark gating.
@@ -198,7 +219,7 @@ export async function runApiReaderCycle(
   const apiMessagesAccum: ScrapedMessage[] = [];
   const perThread: ThreadDiagnostics[] = [];
   let firstThread = true;
-  for (const t of inboxResult.threads) {
+  for (const t of threads) {
     // Inter-thread jitter (skip before the first thread).
     if (!firstThread) {
       await delay(pickJitterMs(jitter, Math.random));
@@ -245,7 +266,7 @@ export async function runApiReaderCycle(
             ...baseOutcome,
             inboxFailureReason: threadResult.reason,
             apiSkipReason: 'inbox_failed',
-            inboxDiagnostics: inboxResult.diagnostics,
+            inboxDiagnostics,
             perThread,
           },
           startedAt,
@@ -327,7 +348,7 @@ export async function runApiReaderCycle(
       ...baseOutcome,
       ok: true,
       cycleEndAuthEpoch,
-      inboxDiagnostics: inboxResult.diagnostics,
+      inboxDiagnostics,
       apiMessages: apiMessagesAccum,
       perThread,
       totalApiMessagesEmitted: apiMessagesAccum.length,

@@ -3,7 +3,12 @@
  * Spec §2.4 step 5 + §2.7.
  *
  * Request body:
- *   { host_id: string, mode: 'initial' | 'incremental' | 'full', since?: ISO8601 }
+ *   {
+ *     host_id: string,
+ *     mode: 'initial' | 'incremental' | 'full',
+ *     since?: ISO8601,
+ *     target_thread_ids?: string[]
+ *   }
  *
  * Response (sync, AFTER all batches posted):
  *   { messages_found: number, bookings_found: number, errors: string[] }
@@ -46,9 +51,32 @@ interface SyncBody {
   // pattern. Optional for back-compat; without it, every non-system message
   // defaults to 'guest' and the saga must reclassify host messages downstream.
   host_display_name?: string;
+  // Optional raw Airbnb thread IDs. When present, /sync reads only these
+  // threads instead of enumerating the host inbox.
+  target_thread_ids?: string[];
 }
 
 const MAX_BATCH_SIZE = 50;
+const MAX_TARGET_THREAD_IDS = 20;
+const RAW_THREAD_ID_RE = /^\d{6,25}$/;
+
+function parseTargetThreadIds(value: unknown): string[] | null {
+  if (value === undefined) return null;
+  if (!Array.isArray(value)) return null;
+  if (value.length < 1 || value.length > MAX_TARGET_THREAD_IDS) return null;
+
+  const seen = new Set<string>();
+  const ids: string[] = [];
+  for (const item of value) {
+    if (typeof item !== 'string') return null;
+    if (!RAW_THREAD_ID_RE.test(item)) return null;
+    if (seen.has(item)) return null;
+    seen.add(item);
+    ids.push(item);
+  }
+
+  return ids;
+}
 
 function isValidSyncBody(body: unknown): body is SyncBody {
   if (!body || typeof body !== 'object') return false;
@@ -57,6 +85,7 @@ function isValidSyncBody(body: unknown): body is SyncBody {
   if (b.mode !== 'initial' && b.mode !== 'incremental' && b.mode !== 'full') return false;
   if (b.since !== undefined && typeof b.since !== 'string') return false;
   if (b.host_display_name !== undefined && typeof b.host_display_name !== 'string') return false;
+  if (b.target_thread_ids !== undefined && parseTargetThreadIds(b.target_thread_ids) === null) return false;
   return true;
 }
 
@@ -125,6 +154,7 @@ export function syncHandler(env: MachineEnv) {
     if (req.body.host_id !== env.HOST_ID) {
       return res.status(403).json({ error: 'host_id_mismatch' });
     }
+    const targetThreadIds = parseTargetThreadIds(req.body.target_thread_ids) ?? undefined;
 
     const lock = tryAcquireSingleFlight('sync');
     if (!lock) {
@@ -171,6 +201,7 @@ export function syncHandler(env: MachineEnv) {
           mode: req.body.mode,
           since: req.body.since,
           hostDisplayName: req.body.host_display_name,
+          targetThreadIds,
         });
         messages = uiResult.messages;
         bookingsFound = uiResult.bookingsFound;
@@ -183,7 +214,7 @@ export function syncHandler(env: MachineEnv) {
             uiResult.messages.length === 0
               ? 'ui_zero_message_recovery'
               : 'ui_partial_budget_recovery';
-          const apiResult = await runApiReaderEmissionCycle(ctx, env);
+          const apiResult = await runApiReaderEmissionCycle(ctx, env, targetThreadIds);
           const recoveredMessages =
             uiResult.messages.length === 0
               ? apiResult.messages
@@ -217,15 +248,16 @@ export function syncHandler(env: MachineEnv) {
           mode: req.body.mode,
           since: req.body.since,
           hostDisplayName: req.body.host_display_name,
+          targetThreadIds,
         });
         messages = uiResult.messages;
         bookingsFound = uiResult.bookingsFound;
         errors.push(...uiResult.errors);
-        const apiResult = await runApiReaderShadowCycle(ctx, env, uiResult.messages);
+        const apiResult = await runApiReaderShadowCycle(ctx, env, uiResult.messages, targetThreadIds);
         apiDiag = apiResult;
       } else {
         // api mode — API cycle is sole emitter.
-        const apiResult = await runApiReaderEmissionCycle(ctx, env);
+        const apiResult = await runApiReaderEmissionCycle(ctx, env, targetThreadIds);
         messages = apiResult.messages;
         bookingsFound = 0; // bookings extraction is a v1 follow-up
         apiDiag = apiResult.diag;
@@ -415,6 +447,7 @@ async function runApiReaderShadowCycle(
   ctx: Awaited<ReturnType<typeof getBrowserContext>>,
   env: MachineEnv,
   uiMessages: ScrapedMessage[],
+  targetThreadIds?: string[],
 ): Promise<{
   apiSkipReason?: string;
   inboxFailureReason?: string;
@@ -457,6 +490,7 @@ async function runApiReaderShadowCycle(
     threadHashFallback: env.AIRBNB_API_THREAD_HASH,
     watermarkStore,
     spa,
+    targetRawThreadIds: targetThreadIds,
     shadowCompare: async ({ cycleId, apiMessages }) => {
       const { advance, diagnostic } = computeShadowComparison(uiMessages, apiMessages, cycleId);
       return { advance, diagnostic };
@@ -520,6 +554,7 @@ function sanitizeApiDiag(outcome: unknown): unknown {
 async function runApiReaderEmissionCycle(
   ctx: Awaited<ReturnType<typeof getBrowserContext>>,
   env: MachineEnv,
+  targetThreadIds?: string[],
 ): Promise<{
   messages: ScrapedMessage[];
   diag: unknown;
@@ -554,6 +589,7 @@ async function runApiReaderEmissionCycle(
     threadHashFallback: env.AIRBNB_API_THREAD_HASH,
     watermarkStore,
     spa,
+    targetRawThreadIds: targetThreadIds,
   });
 
   if (!outcome.ok) {
