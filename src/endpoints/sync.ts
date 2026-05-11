@@ -197,47 +197,68 @@ export function syncHandler(env: MachineEnv) {
       let commitApiWatermarksOnCallbackSuccess = false;
 
       if (env.INBOX_READER_MODE === 'ui') {
-        const uiResult = await scrapeInbox(ctx, {
-          mode: req.body.mode,
-          since: req.body.since,
-          hostDisplayName: req.body.host_display_name,
-          targetThreadIds,
-        });
-        messages = uiResult.messages;
-        bookingsFound = uiResult.bookingsFound;
-        const uiErrors = uiResult.errors;
-        if (
-          shouldRecoverUiReadWithApi(req.body.mode, messages, uiErrors) &&
-          canRunApiReader(env)
-        ) {
-          const fallbackReason =
-            uiResult.messages.length === 0
-              ? 'ui_zero_message_recovery'
-              : 'ui_partial_budget_recovery';
+        if (targetThreadIds?.length && canRunApiReader(env)) {
           const apiResult = await runApiReaderEmissionCycle(ctx, env, targetThreadIds);
-          const recoveredMessages =
-            uiResult.messages.length === 0
-              ? apiResult.messages
-              : mergeApiThenUiMessages(apiResult.messages, uiResult.messages);
+          messages = apiResult.messages;
+          bookingsFound = 0;
           apiDiag = {
-            fallback: fallbackReason,
-            uiMessageCount: uiResult.messages.length,
-            uiErrors: uiErrors.slice(0, 10),
+            fallback: 'target_thread_api_authority',
+            uiMessageCount: 0,
+            uiErrors: [],
             apiMessagesEmitted: apiResult.messages.length,
-            messagesEmitted: recoveredMessages.length,
+            messagesEmitted: apiResult.messages.length,
             error: apiResult.error,
             result: apiResult.diag,
           };
           if (apiResult.error) {
-            errors.push(...uiErrors);
-            errors.push(`api_fallback_failed: ${apiResult.error}`);
+            errors.push(`target_api_failed: ${apiResult.error}`);
           } else {
-            messages = recoveredMessages;
             commitWatermarks = apiResult.commitWatermarks;
             commitApiWatermarksOnCallbackSuccess = true;
           }
         } else {
-          errors.push(...uiErrors);
+          const uiResult = await scrapeInbox(ctx, {
+            mode: req.body.mode,
+            since: req.body.since,
+            hostDisplayName: req.body.host_display_name,
+            targetThreadIds,
+          });
+          messages = uiResult.messages;
+          bookingsFound = uiResult.bookingsFound;
+          const uiErrors = uiResult.errors;
+          if (
+            shouldRecoverUiReadWithApi(req.body.mode, messages, uiErrors) &&
+            canRunApiReader(env)
+          ) {
+            const fallbackReason =
+              uiResult.messages.length === 0
+                ? 'ui_zero_message_recovery'
+                : 'ui_partial_budget_recovery';
+            const apiResult = await runApiReaderEmissionCycle(ctx, env, targetThreadIds);
+            const recoveredMessages =
+              uiResult.messages.length === 0
+                ? apiResult.messages
+                : mergeApiThenUiMessages(apiResult.messages, uiResult.messages);
+            apiDiag = {
+              fallback: fallbackReason,
+              uiMessageCount: uiResult.messages.length,
+              uiErrors: uiErrors.slice(0, 10),
+              apiMessagesEmitted: apiResult.messages.length,
+              messagesEmitted: recoveredMessages.length,
+              error: apiResult.error,
+              result: apiResult.diag,
+            };
+            if (apiResult.error) {
+              errors.push(...uiErrors);
+              errors.push(`api_fallback_failed: ${apiResult.error}`);
+            } else {
+              messages = recoveredMessages;
+              commitWatermarks = apiResult.commitWatermarks;
+              commitApiWatermarksOnCallbackSuccess = true;
+            }
+          } else {
+            errors.push(...uiErrors);
+          }
         }
       } else if (env.INBOX_READER_MODE === 'shadow') {
         // Run UI THEN API sequentially to avoid execution-context collisions
@@ -275,7 +296,11 @@ export function syncHandler(env: MachineEnv) {
       const suppressEmptyBudgetClosure =
         messages.length === 0 &&
         errors.some((err) => String(err).startsWith('sync_time_budget_exhausted'));
-      const callbackBatches = suppressEmptyBudgetClosure ? [] : effective;
+      const suppressEmptyTargetApiFailureClosure =
+        messages.length === 0 &&
+        errors.some((err) => String(err).startsWith('target_api_failed:'));
+      const callbackBatches =
+        suppressEmptyBudgetClosure || suppressEmptyTargetApiFailureClosure ? [] : effective;
       for (let i = 0; i < callbackBatches.length; i++) {
         const batch = callbackBatches[i];
         const isLast = i === callbackBatches.length - 1;
