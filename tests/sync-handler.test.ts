@@ -96,6 +96,41 @@ beforeEach(() => {
 });
 
 describe('syncHandler single-flight and budget semantics', () => {
+  it('rejects malformed target_thread_ids without starting the browser', async () => {
+    const { req, res, statusSpy, jsonSpy } = buildReqRes({
+      host_id: HOST_ID,
+      mode: 'incremental',
+      target_thread_ids: ['2470285483', '2470285483'],
+    });
+
+    await syncHandler(env)(req, res);
+
+    expect(statusSpy).toHaveBeenCalledWith(400);
+    expect(jsonSpy).toHaveBeenCalledWith({ error: 'malformed_body' });
+    expect(browserModule.getBrowserContext).not.toHaveBeenCalled();
+  });
+
+  it('passes target_thread_ids to the UI scraper', async () => {
+    vi.mocked(scraperModule.scrapeInbox).mockResolvedValueOnce({
+      messages: [],
+      bookingsFound: 0,
+      errors: [],
+    });
+
+    const { req, res, statusSpy } = buildReqRes({
+      host_id: HOST_ID,
+      mode: 'incremental',
+      target_thread_ids: ['2470285483'],
+    });
+    await syncHandler(env)(req, res);
+
+    expect(statusSpy).toHaveBeenCalledWith(200);
+    expect(scraperModule.scrapeInbox).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ targetThreadIds: ['2470285483'] }),
+    );
+  });
+
   it('rejects a concurrent sync without emitting callback batches', async () => {
     let finishScrape: ((value: { messages: never[]; bookingsFound: number; errors: never[] }) => void) | null =
       null;

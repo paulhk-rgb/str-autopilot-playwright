@@ -321,6 +321,38 @@ describe('runApiReaderCycle', () => {
     expect(out.watermarkAdvancesApplied[matchingRawId]).toBeGreaterThan(0);
   });
 
+  it('targeted api mode reads only the supplied raw thread id without listing inbox', async () => {
+    markAuthEpochReady();
+    const td = (threadFixture.data as Record<string, unknown>).threadData as Record<string, unknown>;
+    const matchingRawId = decodeRelayId(td.id as string).raw;
+
+    const { page, callCount } = makePage(callIdx => {
+      expect(callIdx).toBe(1);
+      return { kind: 'json', body: threadFixture };
+    });
+
+    const out = await runApiReaderCycle(page as never, {
+      mode: 'api',
+      hostNumericId: HOST,
+      globalUserId: 'g',
+      apiKey: 'k',
+      inboxHashFallback: 'aaa',
+      threadHashFallback: 'bbb',
+      watermarkStore: store,
+      spa: makeReadyListener(),
+      targetRawThreadIds: [matchingRawId],
+    });
+
+    expect(callCount()).toBe(1);
+    expect(out.ok).toBe(true);
+    expect(out.inboxDiagnostics).toBeUndefined();
+    expect(out.perThread).toHaveLength(1);
+    expect(out.apiMessages.length).toBeGreaterThan(0);
+    expect(new Set(out.apiMessages.map(m => m.conversation_airbnb_id))).toEqual(
+      new Set([matchingRawId]),
+    );
+  });
+
   it('elapsedMs is populated and start/end auth-epoch recorded', async () => {
     markAuthEpochReady();
     const startEpoch = currentAuthEpoch();

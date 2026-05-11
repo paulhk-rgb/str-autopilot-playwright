@@ -51,6 +51,8 @@ export interface ScrapeOptions {
   since?: string;
   /** Account display name treated as `host` (everyone else is `guest`). */
   hostDisplayName?: string;
+  /** Raw Airbnb thread IDs to read directly instead of enumerating the inbox. */
+  targetThreadIds?: string[];
   /** Test-only override; production callers should use the mode budgets. */
   timeBudgetMs?: number;
   /** Test-only monotonic clock injection. */
@@ -841,27 +843,31 @@ export async function scrapeInbox(
   const errors: string[] = [];
   const out: ScrapedMessage[] = [];
 
-  const page = await ctx.newPage();
+  const page = opts.targetThreadIds?.length ? null : await ctx.newPage();
   try {
     let threads: InboxThreadSummary[] = [];
-    try {
-      assertBudget(deadline, MIN_STEP_TIMEOUT_MS, 'inbox');
-      threads = await listInboxThreads(page, budget.maxThreads, deadline);
-    } catch (err) {
-      if (err instanceof SyncTimeBudgetExhaustedError) {
-        errors.push(
-          formatBudgetExhaustedError({
-            mode: opts.mode,
-            phase: err.phase,
-            threadsRead: 0,
-            threadsTotal: 0,
-            elapsedMs: elapsedBudgetMs(deadline),
-          }),
-        );
+    if (opts.targetThreadIds?.length) {
+      threads = opts.targetThreadIds.map((threadId) => ({ threadId }));
+    } else {
+      try {
+        assertBudget(deadline, MIN_STEP_TIMEOUT_MS, 'inbox');
+        threads = await listInboxThreads(page!, budget.maxThreads, deadline);
+      } catch (err) {
+        if (err instanceof SyncTimeBudgetExhaustedError) {
+          errors.push(
+            formatBudgetExhaustedError({
+              mode: opts.mode,
+              phase: err.phase,
+              threadsRead: 0,
+              threadsTotal: 0,
+              elapsedMs: elapsedBudgetMs(deadline),
+            }),
+          );
+          return { messages: out, bookingsFound: 0, errors };
+        }
+        errors.push(`inbox_list_failed: ${err instanceof Error ? err.message : String(err)}`);
         return { messages: out, bookingsFound: 0, errors };
       }
-      errors.push(`inbox_list_failed: ${err instanceof Error ? err.message : String(err)}`);
-      return { messages: out, bookingsFound: 0, errors };
     }
 
     let threadsRead = 0;
@@ -931,7 +937,7 @@ export async function scrapeInbox(
       }
     }
   } finally {
-    await page.close().catch(() => undefined);
+    await page?.close().catch(() => undefined);
   }
 
   return { messages: out, bookingsFound: 0, errors };

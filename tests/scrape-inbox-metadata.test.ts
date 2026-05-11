@@ -614,6 +614,33 @@ describe('scrape-inbox sidebar metadata parser', () => {
     expect(pages).toHaveLength(1);
   });
 
+  it('reads supplied target thread ids without first listing the inbox', async () => {
+    const targetThreadPage = makeFakeThreadPage({
+      threadId: '2503263138',
+      senderName: 'Olga',
+      text: 'Thanks again',
+      timestamp: 'Today at 10:00 AM',
+    });
+    const pages = [targetThreadPage];
+    const ctx = {
+      newPage: async () => {
+        const page = pages.shift();
+        if (!page) throw new Error('unexpected new page');
+        return page;
+      },
+    };
+
+    const result = await scrapeInbox(ctx as never, {
+      mode: 'incremental',
+      targetThreadIds: ['2503263138'],
+    });
+
+    expect(result.errors).toEqual([]);
+    expect(result.messages).toHaveLength(1);
+    expect(result.messages[0].conversation_airbnb_id).toBe('2503263138');
+    expect(pages).toHaveLength(0);
+  });
+
   it('reports budget exhaustion before inbox navigation when there is no runtime left', async () => {
     const page = makeFakeInboxPage({
       rows: [
