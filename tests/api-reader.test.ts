@@ -727,6 +727,188 @@ describe('validateThreadResponse', () => {
     expect(new Set(result.messages.map(m => m.guest_name))).toEqual(new Set(['Guest Person']));
   });
 
+  it('emits stay metadata from thread StandardText fields for callback hydration', () => {
+    const cloned = JSON.parse(JSON.stringify(threadFixture));
+    const td = (cloned.data as Record<string, unknown>).threadData as Record<string, unknown>;
+    const participants = td.participants as Record<string, unknown>;
+    const partEdges = participants.edges as Array<Record<string, unknown>>;
+    for (const edge of partEdges) {
+      const node = edge.node as Record<string, unknown>;
+      const enriched = node.enrichedParticipantInfo as Record<string, unknown>;
+      if (node.accountId === HOST) {
+        node.participantRole = 'HOST';
+        enriched.name = 'Host Person';
+      } else {
+        node.participantRole = 'GUEST';
+        enriched.name = 'Samantha';
+      }
+    }
+    td.inboxTitle = {
+      __typename: 'StandardText',
+      components: [{ __typename: 'StandardTextComponent', text: 'Samantha', type: null }],
+      accessibilityText: 'Samantha',
+    };
+    td.inboxDescription = {
+      __typename: 'StandardText',
+      components: [
+        {
+          __typename: 'StandardTextComponent',
+          text: 'Confirmed · May 15, 2026 – May 16, 2026 · 2 Bedroom .3 miles from commons',
+          type: null,
+        },
+      ],
+      accessibilityText:
+        'Confirmed · May 15, 2026 – May 16, 2026 · 2 Bedroom .3 miles from commons',
+    };
+
+    const result = validateThreadResponse(
+      cloned,
+      expectedRawId,
+      HOST,
+      expectedGlobalId,
+      'fakehash',
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('unreachable');
+    expect(result.messages.length).toBeGreaterThan(0);
+    expect(new Set(result.messages.map(m => m.guest_name))).toEqual(new Set(['Samantha']));
+    expect(new Set(result.messages.map(m => m.listing_name))).toEqual(
+      new Set(['2 Bedroom .3 miles from commons']),
+    );
+    expect(new Set(result.messages.map(m => m.check_in))).toEqual(new Set(['2026-05-15']));
+    expect(new Set(result.messages.map(m => m.check_out))).toEqual(new Set(['2026-05-16']));
+    expect(new Set(result.messages.map(m => m.stay_text))).toEqual(
+      new Set(['May 15, 2026 – May 16, 2026']),
+    );
+  });
+
+  it('withholds current stay metadata from messages far outside the stay window', () => {
+    const cloned = JSON.parse(JSON.stringify(threadFixture));
+    const td = (cloned.data as Record<string, unknown>).threadData as Record<string, unknown>;
+    const participants = td.participants as Record<string, unknown>;
+    const partEdges = participants.edges as Array<Record<string, unknown>>;
+    for (const edge of partEdges) {
+      const node = edge.node as Record<string, unknown>;
+      const enriched = node.enrichedParticipantInfo as Record<string, unknown>;
+      if (node.accountId === HOST) {
+        node.participantRole = 'HOST';
+        enriched.name = 'Host Person';
+      } else {
+        node.participantRole = 'GUEST';
+        enriched.name = 'Repeat Guest';
+      }
+    }
+    td.inboxTitle = {
+      __typename: 'StandardText',
+      components: [{ __typename: 'StandardTextComponent', text: 'Repeat Guest', type: null }],
+      accessibilityText: 'Repeat Guest',
+    };
+    td.inboxDescription = {
+      __typename: 'StandardText',
+      components: [
+        {
+          __typename: 'StandardTextComponent',
+          text: 'Confirmed · May 15, 2026 – May 16, 2026 · 2 Bedroom .3 miles from commons',
+          type: null,
+        },
+      ],
+      accessibilityText:
+        'Confirmed · May 15, 2026 – May 16, 2026 · 2 Bedroom .3 miles from commons',
+    };
+    const messageData = td.messageData as Record<string, unknown>;
+    for (const message of messageData.messages as Array<Record<string, unknown>>) {
+      message.createdAtMs = String(Date.parse('2024-01-01T12:00:00.000Z'));
+    }
+
+    const result = validateThreadResponse(
+      cloned,
+      expectedRawId,
+      HOST,
+      expectedGlobalId,
+      'fakehash',
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('unreachable');
+    expect(result.messages.length).toBeGreaterThan(0);
+    expect(new Set(result.messages.map(m => m.guest_name))).toEqual(new Set(['Repeat Guest']));
+    expect(new Set(result.messages.map(m => m.listing_name))).toEqual(new Set([undefined]));
+    expect(new Set(result.messages.map(m => m.check_in))).toEqual(new Set([undefined]));
+    expect(new Set(result.messages.map(m => m.check_out))).toEqual(new Set([undefined]));
+  });
+
+  it('withholds stay metadata from canceled sidebar statuses', () => {
+    const cloned = JSON.parse(JSON.stringify(threadFixture));
+    const td = (cloned.data as Record<string, unknown>).threadData as Record<string, unknown>;
+    td.inboxTitle = {
+      __typename: 'StandardText',
+      components: [{ __typename: 'StandardTextComponent', text: 'Canceled Guest', type: null }],
+      accessibilityText: 'Canceled Guest',
+    };
+    td.inboxDescription = {
+      __typename: 'StandardText',
+      components: [
+        {
+          __typename: 'StandardTextComponent',
+          text: 'Canceled · May 15, 2026 – May 16, 2026 · 2 Bedroom .3 miles from commons',
+          type: null,
+        },
+      ],
+      accessibilityText:
+        'Canceled · May 15, 2026 – May 16, 2026 · 2 Bedroom .3 miles from commons',
+    };
+
+    const result = validateThreadResponse(
+      cloned,
+      expectedRawId,
+      HOST,
+      expectedGlobalId,
+      'fakehash',
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('unreachable');
+    expect(result.messages.length).toBeGreaterThan(0);
+    expect(new Set(result.messages.map(m => m.listing_name))).toEqual(new Set([undefined]));
+    expect(new Set(result.messages.map(m => m.check_in))).toEqual(new Set([undefined]));
+    expect(new Set(result.messages.map(m => m.check_out))).toEqual(new Set([undefined]));
+  });
+
+  it('does not treat status words inside listing names as non-stay statuses', () => {
+    const cloned = JSON.parse(JSON.stringify(threadFixture));
+    const td = (cloned.data as Record<string, unknown>).threadData as Record<string, unknown>;
+    td.inboxTitle = {
+      __typename: 'StandardText',
+      components: [{ __typename: 'StandardTextComponent', text: 'Guest Person', type: null }],
+      accessibilityText: 'Guest Person',
+    };
+    td.inboxDescription = {
+      __typename: 'StandardText',
+      components: [
+        {
+          __typename: 'StandardTextComponent',
+          text: 'Confirmed · May 15, 2026 – May 16, 2026 · Cottage Upon Request',
+          type: null,
+        },
+      ],
+      accessibilityText: 'Confirmed · May 15, 2026 – May 16, 2026 · Cottage Upon Request',
+    };
+
+    const result = validateThreadResponse(
+      cloned,
+      expectedRawId,
+      HOST,
+      expectedGlobalId,
+      'fakehash',
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('unreachable');
+    expect(result.messages.length).toBeGreaterThan(0);
+    expect(new Set(result.messages.map(m => m.listing_name))).toEqual(
+      new Set(['Cottage Upon Request']),
+    );
+    expect(new Set(result.messages.map(m => m.check_in))).toEqual(new Set(['2026-05-15']));
+    expect(new Set(result.messages.map(m => m.check_out))).toEqual(new Set(['2026-05-16']));
+  });
+
   it('prefers the booker name when a thread has additional guest participants', () => {
     const cloned = JSON.parse(JSON.stringify(threadFixture));
     const td = (cloned.data as Record<string, unknown>).threadData as Record<string, unknown>;

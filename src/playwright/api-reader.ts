@@ -29,6 +29,7 @@
 
 import { randomBytes } from 'crypto';
 import type { Page } from 'playwright';
+import { parseInboxThreadSummary } from './scrape-inbox';
 
 export type InboxReaderMode = 'ui' | 'shadow' | 'api';
 
@@ -211,6 +212,29 @@ function cleanText(value: unknown): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
+function standardText(value: unknown): string | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const node = value as Record<string, unknown>;
+  const components = node.components;
+  if (Array.isArray(components)) {
+    const text = components
+      .map((component) =>
+        cleanText((component as Record<string, unknown> | null | undefined)?.text),
+      )
+      .filter((part): part is string => Boolean(part))
+      .join(' ');
+    if (text) return text;
+  }
+  return cleanText(node.accessibilityText);
+}
+
+function hasNonStaySidebarStatus(description: string | undefined): boolean {
+  const status = description?.split(/[·•\n]/)[0]?.trim() ?? '';
+  return /\b(cancelled|canceled|inquiry|request to book|booking request|pre-?approved|declined|expired|withdrawn|pending|awaiting|special offer|change request)\b/i.test(
+    status,
+  );
+}
+
 function cleanId(value: unknown): string {
   if (typeof value === 'string' || typeof value === 'number') {
     return String(value).trim();
@@ -302,6 +326,53 @@ function extractThreadGuestName(
 
   const allNames = new Set(byRank.map((c) => c.name));
   return allNames.size === 1 ? [...allNames][0] : undefined;
+}
+
+function extractThreadStayMetadata(
+  threadData: Record<string, unknown>,
+  rawThreadId: string,
+  participantGuestName: string | undefined,
+  now: Date,
+): {
+  guestName?: string;
+  listingName?: string;
+  checkIn?: string;
+  checkOut?: string;
+  stayText?: string;
+} {
+  const title = standardText(threadData.inboxTitle);
+  const description = standardText(threadData.inboxDescription);
+  const raw = [title ?? participantGuestName, description].filter(Boolean).join('\n');
+  let parsed: { guestName?: string; listingName?: string; checkIn?: string; checkOut?: string; stayText?: string } = {};
+  if (raw && !hasNonStaySidebarStatus(description)) {
+    try {
+      parsed = parseInboxThreadSummary(rawThreadId, raw, now);
+    } catch {
+      parsed = {};
+    }
+  }
+
+  return {
+    guestName: participantGuestName ?? parsed.guestName,
+    listingName: parsed.listingName,
+    checkIn: parsed.checkIn,
+    checkOut: parsed.checkOut,
+    stayText: parsed.stayText,
+  };
+}
+
+function stayMetadataAppliesToMessage(
+  metadata: { checkIn?: string; checkOut?: string },
+  createdAtMs: number,
+): boolean {
+  if (!metadata.checkIn || !metadata.checkOut) return false;
+  const checkIn = Date.parse(`${metadata.checkIn}T00:00:00.000Z`);
+  const checkOut = Date.parse(`${metadata.checkOut}T23:59:59.999Z`);
+  if (!Number.isFinite(checkIn) || !Number.isFinite(checkOut)) return false;
+
+  const maxLeadMs = 365 * 24 * 60 * 60 * 1000;
+  const maxFollowMs = 90 * 24 * 60 * 60 * 1000;
+  return createdAtMs >= checkIn - maxLeadMs && createdAtMs <= checkOut + maxFollowMs;
 }
 
 /**
@@ -696,6 +767,10 @@ export interface ScrapedMessage {
   timestamp: string;
   conversation_airbnb_id: string;
   guest_name?: string;
+  listing_name?: string;
+  check_in?: string;
+  check_out?: string;
+  stay_text?: string;
 }
 
 export interface ThreadDiagnostics {
@@ -1193,15 +1268,28 @@ export function validateThreadResponse(
   filtered.sort((a, b) => a.createdAtMs - b.createdAtMs);
 
   const conversationAirbnbId = expectedRawId;
-  const guestName = extractThreadGuestName(threadData, hostNumericId);
-  const out: ScrapedMessage[] = filtered.map(c => ({
-    airbnb_message_id: `airbnb-${c.msgId}`,
-    content: c.extracted.text,
-    sender: c.sender,
-    timestamp: new Date(c.createdAtMs).toISOString(),
-    conversation_airbnb_id: conversationAirbnbId,
-    guest_name: guestName,
-  }));
+  const participantGuestName = extractThreadGuestName(threadData, hostNumericId);
+  const stayMetadata = extractThreadStayMetadata(
+    threadData,
+    expectedRawId,
+    participantGuestName,
+    new Date(),
+  );
+  const out: ScrapedMessage[] = filtered.map(c => {
+    const applyStayMetadata = stayMetadataAppliesToMessage(stayMetadata, c.createdAtMs);
+    return {
+      airbnb_message_id: `airbnb-${c.msgId}`,
+      content: c.extracted.text,
+      sender: c.sender,
+      timestamp: new Date(c.createdAtMs).toISOString(),
+      conversation_airbnb_id: conversationAirbnbId,
+      guest_name: stayMetadata.guestName,
+      listing_name: applyStayMetadata ? stayMetadata.listingName : undefined,
+      check_in: applyStayMetadata ? stayMetadata.checkIn : undefined,
+      check_out: applyStayMetadata ? stayMetadata.checkOut : undefined,
+      stay_text: applyStayMetadata ? stayMetadata.stayText : undefined,
+    };
+  });
   diag.messagesEmitted = out.length;
 
   return { ok: true, messages: out, diagnostics: diag, rawCreatedAtMs };
