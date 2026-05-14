@@ -72,7 +72,7 @@ interface ScrapeDeadline {
   nowMs: () => number;
 }
 
-interface InboxThreadSummary {
+export interface InboxThreadSummary {
   threadId: string;
   guestName?: string;
   listingName?: string;
@@ -222,7 +222,7 @@ function isExplicitEmptyInboxText(bodyText: string): boolean {
   return EMPTY_INBOX_TEXT_PATTERN.test(bodyText);
 }
 
-function parseInboxThreadSummary(
+export function parseInboxThreadSummary(
   threadId: string,
   rawText: string,
   now: Date = new Date(),
