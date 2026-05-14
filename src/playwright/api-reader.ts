@@ -767,10 +767,17 @@ export interface ScrapedMessage {
   timestamp: string;
   conversation_airbnb_id: string;
   guest_name?: string;
+  reactions?: ScrapedMessageReaction[];
   listing_name?: string;
   check_in?: string;
   check_out?: string;
   stay_text?: string;
+}
+
+export interface ScrapedMessageReaction {
+  emoji: string;
+  count?: number;
+  actor_role?: 'guest' | 'host' | 'unknown';
 }
 
 export interface ThreadDiagnostics {
@@ -908,6 +915,70 @@ export function extractText(message: unknown): MessageExtract {
         text: `[unsupported:contentType:${contentType || 'missing'}]`,
       };
   }
+}
+
+export function extractReactionSummary(
+  message: unknown,
+  hostNumericId: string,
+): ScrapedMessageReaction[] {
+  if (!message || typeof message !== 'object') return [];
+  const reactionSummary = (message as Record<string, unknown>).reactionSummary as
+    | Record<string, unknown>
+    | undefined;
+  if (!reactionSummary || typeof reactionSummary !== 'object') return [];
+
+  const reactions: ScrapedMessageReaction[] = [];
+  const modalData = Array.isArray(reactionSummary.modalData) ? reactionSummary.modalData : [];
+  for (const reactionUnknown of modalData) {
+    const reaction = reactionUnknown as Record<string, unknown> | null;
+    const emoji = cleanReactionEmoji(reaction?.emoji);
+    if (!emoji) continue;
+    const creator = reaction?.creator as Record<string, unknown> | undefined;
+    const actorId = cleanId(creator?.accountId);
+    const existing = reactions.find(r => r.emoji === emoji);
+    const actorRole = actorId && actorId === hostNumericId ? 'host' : 'unknown';
+    if (existing) {
+      existing.count = Math.min((existing.count ?? 1) + 1, 50);
+      if (actorRole === 'host') existing.actor_role = 'host';
+      continue;
+    }
+    reactions.push({
+      emoji,
+      count: 1,
+      actor_role: actorRole,
+    });
+  }
+
+  const reactionCounts = Array.isArray(reactionSummary.reactionCounts)
+    ? reactionSummary.reactionCounts
+    : [];
+  for (const countUnknown of reactionCounts) {
+    const countRow = countUnknown as Record<string, unknown> | null;
+    const emoji = cleanReactionEmoji(countRow?.emoji);
+    const rawCount = countRow?.count;
+    const count = typeof rawCount === 'number' && Number.isFinite(rawCount)
+      ? rawCount
+      : typeof rawCount === 'string'
+        ? Number(rawCount)
+        : 0;
+    if (!emoji || !Number.isFinite(count) || count < 1) continue;
+    const existing = reactions.find(r => r.emoji === emoji);
+    if (existing) {
+      existing.count = Math.max(existing.count ?? 1, Math.min(Math.trunc(count), 50));
+      continue;
+    }
+    reactions.push({
+      emoji,
+      count: Math.min(Math.trunc(count), 50),
+      actor_role: 'unknown',
+    });
+  }
+
+  return reactions.slice(0, 20);
+}
+
+function cleanReactionEmoji(value: unknown): string {
+  return typeof value === 'string' ? value.trim().slice(0, 32) : '';
 }
 
 /**
@@ -1090,6 +1161,7 @@ export function validateThreadResponse(
     sender: 'host' | 'guest';
     extracted: MessageExtract;
     contentType: string;
+    reactions: ScrapedMessageReaction[];
   };
   const candidates: Candidate[] = [];
   const seenNumericIds = new Set<string>();
@@ -1240,6 +1312,7 @@ export function validateThreadResponse(
       sender,
       extracted,
       contentType,
+      reactions: extractReactionSummary(msg, hostNumericId),
     });
     seenNumericIds.add(numericId);
   }
@@ -1284,6 +1357,7 @@ export function validateThreadResponse(
       timestamp: new Date(c.createdAtMs).toISOString(),
       conversation_airbnb_id: conversationAirbnbId,
       guest_name: stayMetadata.guestName,
+      reactions: c.reactions,
       listing_name: applyStayMetadata ? stayMetadata.listingName : undefined,
       check_in: applyStayMetadata ? stayMetadata.checkIn : undefined,
       check_out: applyStayMetadata ? stayMetadata.checkOut : undefined,

@@ -7,6 +7,7 @@ import {
   buildInboxUrl,
   buildThreadUrl,
   decodeRelayId,
+  extractReactionSummary,
   extractText,
   generateTraceId,
   listInboxViaApi,
@@ -596,6 +597,72 @@ describe('extractText', () => {
   });
 });
 
+describe('extractReactionSummary', () => {
+  const HOST = deriveHostAccountIdFromInbox();
+
+  it('extracts modal reactions with actor role from Airbnb reactionSummary', () => {
+    const result = extractReactionSummary(
+      {
+        reactionSummary: {
+          modalData: [
+            {
+              creator: { accountId: HOST },
+              emoji: '❤️',
+            },
+          ],
+          reactionCounts: [{ emoji: '❤️', count: 1 }],
+        },
+      },
+      HOST,
+    );
+
+    expect(result).toEqual([{ emoji: '❤️', count: 1, actor_role: 'host' }]);
+  });
+
+  it('falls back to aggregate reactionCounts when modalData is empty', () => {
+    const result = extractReactionSummary(
+      {
+        reactionSummary: {
+          modalData: [],
+          reactionCounts: [{ emoji: '👍', count: '2' }],
+        },
+      },
+      HOST,
+    );
+
+    expect(result).toEqual([{ emoji: '👍', count: 2, actor_role: 'unknown' }]);
+  });
+
+  it('merges aggregate counts and caps unexpected long emoji strings', () => {
+    const result = extractReactionSummary(
+      {
+        reactionSummary: {
+          modalData: [
+            {
+              creator: { accountId: 'not-the-host' },
+              emoji: '❤️',
+            },
+            {
+              creator: { accountId: HOST },
+              emoji: '❤️',
+            },
+          ],
+          reactionCounts: [
+            { emoji: '❤️', count: 3 },
+            { emoji: 'x'.repeat(40), count: 1 },
+          ],
+        },
+      },
+      HOST,
+    );
+
+    expect(result).toEqual([
+      { emoji: '❤️', count: 3, actor_role: 'host' },
+      { emoji: 'x'.repeat(32), count: 1, actor_role: 'unknown' },
+    ]);
+  });
+});
+
 describe('buildThreadUrl', () => {
   const baseOpts = {
     threadHash: 'feed1234',
@@ -695,6 +762,22 @@ describe('validateThreadResponse', () => {
       expect(m.conversation_airbnb_id).toBe(expectedRawId);
       expect(['guest', 'host']).toContain(m.sender);
     }
+  });
+
+  it('attaches Airbnb reactions to the parent message payload', () => {
+    const result = validateThreadResponse(
+      threadFixture,
+      expectedRawId,
+      HOST,
+      expectedGlobalId,
+      'fakehash',
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('unreachable');
+
+    const reacted = result.messages.find(m => m.reactions && m.reactions.length > 0);
+    expect(reacted).toBeDefined();
+    expect(reacted?.reactions).toEqual([{ emoji: '❤️', count: 1, actor_role: 'host' }]);
   });
 
   it('emits the single non-host guest participant name for callback hydration', () => {
