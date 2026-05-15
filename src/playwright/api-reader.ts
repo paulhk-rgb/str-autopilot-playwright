@@ -767,11 +767,11 @@ export interface ScrapedMessage {
   timestamp: string;
   conversation_airbnb_id: string;
   guest_name?: string;
-  reactions?: ScrapedMessageReaction[];
   listing_name?: string;
   check_in?: string;
   check_out?: string;
   stay_text?: string;
+  reactions: ScrapedMessageReaction[];
 }
 
 export interface ScrapedMessageReaction {
@@ -920,6 +920,7 @@ export function extractText(message: unknown): MessageExtract {
 export function extractReactionSummary(
   message: unknown,
   hostNumericId: string,
+  participantAccountIds: Set<string> = new Set(),
 ): ScrapedMessageReaction[] {
   if (!message || typeof message !== 'object') return [];
   const reactionSummary = (message as Record<string, unknown>).reactionSummary as
@@ -927,26 +928,31 @@ export function extractReactionSummary(
     | undefined;
   if (!reactionSummary || typeof reactionSummary !== 'object') return [];
 
-  const reactions: ScrapedMessageReaction[] = [];
+  const countsByEmoji = new Map<string, number>();
+  const rolesByEmoji = new Map<string, Set<'guest' | 'host' | 'unknown'>>();
+
+  const addRole = (emoji: string, role: 'guest' | 'host' | 'unknown') => {
+    const roles = rolesByEmoji.get(emoji) ?? new Set<'guest' | 'host' | 'unknown'>();
+    roles.add(role);
+    rolesByEmoji.set(emoji, roles);
+  };
+
   const modalData = Array.isArray(reactionSummary.modalData) ? reactionSummary.modalData : [];
   for (const reactionUnknown of modalData) {
     const reaction = reactionUnknown as Record<string, unknown> | null;
     const emoji = cleanReactionEmoji(reaction?.emoji);
     if (!emoji) continue;
-    const creator = reaction?.creator as Record<string, unknown> | undefined;
-    const actorId = cleanId(creator?.accountId);
-    const existing = reactions.find(r => r.emoji === emoji);
-    const actorRole = actorId && actorId === hostNumericId ? 'host' : 'unknown';
-    if (existing) {
-      existing.count = Math.min((existing.count ?? 1) + 1, 50);
-      if (actorRole === 'host') existing.actor_role = 'host';
-      continue;
+    addRole(emoji, roleForReactionCreator(reaction?.creator, hostNumericId, participantAccountIds));
+    countsByEmoji.set(emoji, Math.min((countsByEmoji.get(emoji) ?? 0) + 1, 50));
+  }
+
+  const current = reactionSummary.reactionByCurrentAccount as Record<string, unknown> | undefined;
+  const currentEmoji = cleanReactionEmoji(current?.emoji);
+  if (currentEmoji) {
+    addRole(currentEmoji, 'host');
+    if (!countsByEmoji.has(currentEmoji)) {
+      countsByEmoji.set(currentEmoji, 1);
     }
-    reactions.push({
-      emoji,
-      count: 1,
-      actor_role: actorRole,
-    });
   }
 
   const reactionCounts = Array.isArray(reactionSummary.reactionCounts)
@@ -962,19 +968,14 @@ export function extractReactionSummary(
         ? Number(rawCount)
         : 0;
     if (!emoji || !Number.isFinite(count) || count < 1) continue;
-    const existing = reactions.find(r => r.emoji === emoji);
-    if (existing) {
-      existing.count = Math.max(existing.count ?? 1, Math.min(Math.trunc(count), 50));
-      continue;
-    }
-    reactions.push({
-      emoji,
-      count: Math.min(Math.trunc(count), 50),
-      actor_role: 'unknown',
-    });
+    countsByEmoji.set(emoji, Math.min(Math.trunc(count), 50));
   }
 
-  return reactions.slice(0, 20);
+  return [...countsByEmoji.entries()].slice(0, 20).map(([emoji, count]) => ({
+    emoji,
+    count,
+    actor_role: summarizeReactionActorRole(rolesByEmoji.get(emoji) ?? new Set()) ?? 'unknown',
+  }));
 }
 
 function cleanReactionEmoji(value: unknown): string {
@@ -1024,6 +1025,30 @@ export function buildThreadUrl(opts: {
     extensions: JSON.stringify(extensions),
   });
   return `https://www.airbnb.com/api/v3/ViaductGetThreadAndDataQuery/${opts.threadHash}?${params.toString()}`;
+}
+
+function roleForReactionCreator(
+  creator: unknown,
+  hostNumericId: string,
+  participantAccountIds: Set<string>,
+): 'guest' | 'host' | 'unknown' {
+  if (!creator || typeof creator !== 'object') return 'unknown';
+  const accountId = cleanId((creator as Record<string, unknown>).accountId);
+  if (!accountId) return 'unknown';
+  if (accountId === hostNumericId) return 'host';
+  if (participantAccountIds.has(accountId)) return 'guest';
+  return 'unknown';
+}
+
+function summarizeReactionActorRole(roles: Set<'guest' | 'host' | 'unknown'>):
+  | 'guest'
+  | 'host'
+  | 'unknown'
+  | undefined {
+  const knownRoles = [...roles].filter(role => role !== 'unknown');
+  if (knownRoles.length === 1) return knownRoles[0];
+  if (knownRoles.length > 1) return 'unknown';
+  return undefined;
 }
 
 /**
@@ -1312,7 +1337,7 @@ export function validateThreadResponse(
       sender,
       extracted,
       contentType,
-      reactions: extractReactionSummary(msg, hostNumericId),
+      reactions: extractReactionSummary(msg, hostNumericId, participantAccountIds),
     });
     seenNumericIds.add(numericId);
   }
@@ -1357,11 +1382,11 @@ export function validateThreadResponse(
       timestamp: new Date(c.createdAtMs).toISOString(),
       conversation_airbnb_id: conversationAirbnbId,
       guest_name: stayMetadata.guestName,
-      reactions: c.reactions,
       listing_name: applyStayMetadata ? stayMetadata.listingName : undefined,
       check_in: applyStayMetadata ? stayMetadata.checkIn : undefined,
       check_out: applyStayMetadata ? stayMetadata.checkOut : undefined,
       stay_text: applyStayMetadata ? stayMetadata.stayText : undefined,
+      reactions: c.reactions,
     };
   });
   diag.messagesEmitted = out.length;
