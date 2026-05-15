@@ -764,7 +764,7 @@ describe('validateThreadResponse', () => {
     }
   });
 
-  it('attaches Airbnb reactions to the parent message payload', () => {
+  it('extracts callback-safe Airbnb reactions from reactionSummary', () => {
     const result = validateThreadResponse(
       threadFixture,
       expectedRawId,
@@ -775,9 +775,29 @@ describe('validateThreadResponse', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error('unreachable');
 
-    const reacted = result.messages.find(m => m.reactions && m.reactions.length > 0);
-    expect(reacted).toBeDefined();
-    expect(reacted?.reactions).toEqual([{ emoji: '❤️', count: 1, actor_role: 'host' }]);
+    const reacted = result.messages.find(m => (m.reactions ?? []).length > 0);
+    expect(reacted?.reactions).toEqual([
+      {
+        emoji: '❤️',
+        count: 1,
+        actor_role: 'host',
+      },
+    ]);
+  });
+
+  it('emits empty reaction arrays for API messages without reactions', () => {
+    const result = validateThreadResponse(
+      threadFixture,
+      expectedRawId,
+      HOST,
+      expectedGlobalId,
+      'fakehash',
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('unreachable');
+
+    const withoutReaction = result.messages.find(m => (m.reactions ?? []).length === 0);
+    expect(withoutReaction?.reactions).toEqual([]);
   });
 
   it('emits the single non-host guest participant name for callback hydration', () => {

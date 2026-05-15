@@ -36,6 +36,13 @@ export interface ScrapedMessage {
   check_in?: string;
   check_out?: string;
   stay_text?: string;
+  reactions?: ScrapedMessageReaction[];
+}
+
+export interface ScrapedMessageReaction {
+  emoji: string;
+  count?: number;
+  actor_role?: 'guest' | 'host' | 'unknown';
 }
 
 interface ParsedGroup {
