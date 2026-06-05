@@ -48,6 +48,10 @@ export async function getBrowserContext(opts: BrowserOptions): Promise<BrowserCo
     ignoreDefaultArgs: IGNORE_DEFAULT_ARGS,
     // Airbnb's rate-limiter is UA-sensitive — explicit UA avoids headless-chrome fingerprint leakage.
     userAgent: AIRBNB_USER_AGENT,
+    locale: 'en-US',
+    extraHTTPHeaders: {
+      'Accept-Language': 'en-US,en;q=0.9',
+    },
   });
 
   const ctx = await ctxPromise;

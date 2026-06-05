@@ -11,7 +11,9 @@ interface LockState {
   token: symbol;
 }
 
-const STALE_LOCK_MS = 6 * 60_000;
+// Pricing market scrapes can legitimately run close to the app-side 15 minute timeout.
+// Keep the stale window longer than that so a long active scrape cannot self-clear its lock.
+const STALE_LOCK_MS = 20 * 60_000;
 
 let currentLock: LockState | null = null;
 
