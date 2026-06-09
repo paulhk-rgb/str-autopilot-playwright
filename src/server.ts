@@ -16,6 +16,10 @@ import { scrapeReviewHandler } from './endpoints/scrape-review';
 import { scrapeReservationListHandler } from './endpoints/scrape-reservation-list';
 import { scrapeReservationDetailsHandler } from './endpoints/scrape-reservation-details';
 import { scrapeListingEditorHandler } from './endpoints/scrape-listing-editor';
+import { scrapeCalendarPricesHandler } from './endpoints/scrape-calendar-prices';
+import { scrapeMarketPricesHandler } from './endpoints/scrape-market-prices';
+import { setMinimumStaysHandler } from './endpoints/set-minimum-stays';
+import { setPricesHandler } from './endpoints/set-prices';
 import { sendMessageHandler } from './endpoints/send-message';
 import { closeBrowserContext } from './playwright/browser';
 
@@ -70,6 +74,10 @@ function buildApp(env: ReturnType<typeof readEnv>) {
   app.post('/scrape-reservation-list', hmacAuth, scrapeReservationListHandler(env));
   app.post('/scrape-reservation-details', hmacAuth, scrapeReservationDetailsHandler(env));
   app.post('/scrape-listing-editor', hmacAuth, scrapeListingEditorHandler(env));
+  app.post('/scrape-calendar-prices', hmacAuth, scrapeCalendarPricesHandler(env));
+  app.post('/scrape-market-prices', hmacAuth, scrapeMarketPricesHandler(env));
+  app.post('/set-minimum-stays', hmacAuth, setMinimumStaysHandler(env));
+  app.post('/set-prices', hmacAuth, setPricesHandler(env));
   app.post('/send-message', hmacAuth, sendMessageHandler(env));
 
   // 404 for anything else — Fly's private-network layer already drops public traffic.

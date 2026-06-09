@@ -1,53 +1,66 @@
 /**
- * POST /scrape-listing-editor — HMAC-authed.
+ * POST /scrape-market-prices — HMAC-authed read-only market scrape.
  *
- * Captures text/field snapshots from the authenticated Airbnb host listing
- * editor. The StaySync app owns DB writes and KB import; this worker only reads
- * pages from the per-host persistent browser session.
+ * The worker reads Airbnb/Booking market pages from host-provided market config.
+ * It does not write prices, mutate Airbnb, or source any Paul-specific defaults.
  */
 
 import type { Request, Response } from 'express';
 import type { MachineEnv } from '../lib/env';
 import { getSingleFlightSnapshot, tryAcquireSingleFlight } from '../lib/single-flight';
-import { getBrowserContext, readAirbnbSessionStrict } from '../playwright/browser';
 import { currentAuthEpoch, isAuthEpochReady } from '../playwright/auth-epoch';
+import { getBrowserContext, readAirbnbSessionStrict } from '../playwright/browser';
 import {
-  ListingEditorScrapeError,
-  normalizeListingId,
-  normalizeRequestedPaths,
-  scrapeListingEditor,
-} from '../playwright/scrape-listing-editor';
+  MarketScrapeError,
+  normalizeMarketConfig,
+  scrapeMarketPrices,
+  type MarketScrapeConfig,
+} from '../playwright/scrape-market-prices';
 
-interface ScrapeListingEditorBody {
+interface ScrapeMarketPricesBody {
   host_id: string;
-  listing_id: string;
-  paths?: string[];
+  property_id: string;
+  market: MarketScrapeConfig;
+  dry_run?: boolean;
 }
 
-function isValidBody(body: unknown): body is ScrapeListingEditorBody {
+function isValidBody(body: unknown): body is ScrapeMarketPricesBody {
   if (!body || typeof body !== 'object') return false;
-  const b = body as Partial<ScrapeListingEditorBody>;
+  const b = body as Partial<ScrapeMarketPricesBody>;
   if (typeof b.host_id !== 'string' || b.host_id.length === 0) return false;
-  if (typeof b.listing_id !== 'string') return false;
+  if (typeof b.property_id !== 'string' || b.property_id.length === 0) return false;
+  if (b.dry_run !== undefined && typeof b.dry_run !== 'boolean') return false;
   try {
-    normalizeListingId(b.listing_id);
-    normalizeRequestedPaths(b.paths);
+    normalizeMarketConfig(b.market);
   } catch {
     return false;
   }
   return true;
 }
 
-function statusForListingEditorError(error: ListingEditorScrapeError): number {
+function statusForMarketScrapeError(error: MarketScrapeError): number {
   switch (error.code) {
-    case 'listing_id_mismatch':
-      return 409;
-    case 'no_pages_scraped':
+    case 'blocked_by_airbnb':
+      return 429;
+    case 'no_dates_scraped':
       return 502;
   }
 }
 
-export function scrapeListingEditorHandler(env: MachineEnv) {
+function marketSingleFlightOperation(
+  body: ScrapeMarketPricesBody,
+  market = normalizeMarketConfig(body.market),
+): string {
+  const datesKey = market.target_dates?.length
+    ? market.target_dates.join(',')
+    : `horizon:${market.horizon_days}`;
+  const nightKey = market.night_counts.join(',');
+  const bedroomKey = market.bedroom_counts.join(',');
+  const locationKey = market.location.trim().toLowerCase();
+  return `scrape-market-prices:${body.host_id}:${locationKey}:dates:${datesKey}:nights:${nightKey}:bedrooms:${bedroomKey}`;
+}
+
+export function scrapeMarketPricesHandler(env: MachineEnv) {
   return async (req: Request, res: Response) => {
     if (!isValidBody(req.body)) {
       return res.status(400).json({ error: 'malformed_body' });
@@ -57,7 +70,8 @@ export function scrapeListingEditorHandler(env: MachineEnv) {
       return res.status(403).json({ error: 'host_id_mismatch' });
     }
 
-    const lease = tryAcquireSingleFlight('scrape-listing-editor');
+    const market = normalizeMarketConfig(req.body.market);
+    const lease = tryAcquireSingleFlight(marketSingleFlightOperation(req.body, market));
     if (!lease) {
       return res.status(409).json({
         error: 'scrape_already_running',
@@ -101,6 +115,7 @@ export function scrapeListingEditorHandler(env: MachineEnv) {
           message: err instanceof Error ? err.message : String(err),
         });
       }
+
       if (!sessionOk) {
         if (currentAuthEpoch() !== epochAtStart) {
           return res.status(503).json({ error: 'auth_epoch_changed' });
@@ -113,9 +128,8 @@ export function scrapeListingEditorHandler(env: MachineEnv) {
       }
 
       try {
-        const result = await scrapeListingEditor(ctx, {
-          listing_id: req.body.listing_id,
-          paths: req.body.paths,
+        const result = await scrapeMarketPrices(ctx, {
+          market,
         });
 
         if (currentAuthEpoch() !== epochAtStart) {
@@ -127,8 +141,8 @@ export function scrapeListingEditorHandler(env: MachineEnv) {
         if (currentAuthEpoch() !== epochAtStart) {
           return res.status(503).json({ error: 'auth_epoch_changed' });
         }
-        if (err instanceof ListingEditorScrapeError) {
-          return res.status(statusForListingEditorError(err)).json({
+        if (err instanceof MarketScrapeError) {
+          return res.status(statusForMarketScrapeError(err)).json({
             error: err.code,
             message: err.message,
           });
@@ -144,7 +158,8 @@ export function scrapeListingEditorHandler(env: MachineEnv) {
   };
 }
 
-export const __scrapeListingEditorEndpointTestHooks = {
+export const __scrapeMarketPricesEndpointTestHooks = {
   isValidBody,
-  statusForListingEditorError,
+  marketSingleFlightOperation,
+  statusForMarketScrapeError,
 };

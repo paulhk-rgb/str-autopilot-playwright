@@ -10,12 +10,12 @@
 import type { Request, Response } from 'express';
 import type { MachineEnv } from '../lib/env';
 import {
-  getBrowserContext,
+  getCachedAirbnbSessionValid,
   getLastAirbnbRequestAt,
   getSpaListener,
-  hasAirbnbSession,
 } from '../playwright/browser';
 import { currentAuthEpoch, isAuthEpochReady } from '../playwright/auth-epoch';
+import { getSingleFlightSnapshot } from '../lib/single-flight';
 
 export function healthHandler(env: MachineEnv) {
   return async (_req: Request, res: Response) => {
@@ -23,17 +23,8 @@ export function healthHandler(env: MachineEnv) {
     const memMb = Math.round(memBytes / (1024 * 1024));
     const uptime = Math.round(process.uptime());
 
-    let cookieValid = false;
-    let browserOk = false;
-    try {
-      const ctx = await getBrowserContext({ profileDir: env.PROFILE_DIR });
-      cookieValid = await hasAirbnbSession(ctx);
-      browserOk = true;
-    } catch {
-      browserOk = false;
-    }
-
-    const status = browserOk && cookieValid ? 'ok' : 'degraded';
+    const cookieValid = getCachedAirbnbSessionValid();
+    const status = cookieValid === false ? 'degraded' : 'ok';
     const last = getLastAirbnbRequestAt();
 
     // v0.3 spec §5: surface api-reader diagnostics for the pull-path alerting
@@ -77,6 +68,7 @@ export function healthHandler(env: MachineEnv) {
       memory_mb: memMb,
       cookie_valid: cookieValid,
       last_airbnb_request_at: last ? last.toISOString() : null,
+      single_flight: getSingleFlightSnapshot(),
       api_reader: apiReader,
     });
   };

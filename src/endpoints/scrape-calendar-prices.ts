@@ -1,53 +1,69 @@
 /**
- * POST /scrape-listing-editor — HMAC-authed.
+ * POST /scrape-calendar-prices — HMAC-authed read-only host calendar scrape.
  *
- * Captures text/field snapshots from the authenticated Airbnb host listing
- * editor. The StaySync app owns DB writes and KB import; this worker only reads
- * pages from the per-host persistent browser session.
+ * This endpoint observes Airbnb's host calendar for a listing/date range. It never mutates
+ * prices, minimum stays, availability, or smart-pricing state.
  */
 
 import type { Request, Response } from 'express';
 import type { MachineEnv } from '../lib/env';
 import { getSingleFlightSnapshot, tryAcquireSingleFlight } from '../lib/single-flight';
-import { getBrowserContext, readAirbnbSessionStrict } from '../playwright/browser';
 import { currentAuthEpoch, isAuthEpochReady } from '../playwright/auth-epoch';
+import { getBrowserContext, readAirbnbSessionStrict } from '../playwright/browser';
 import {
-  ListingEditorScrapeError,
-  normalizeListingId,
-  normalizeRequestedPaths,
-  scrapeListingEditor,
-} from '../playwright/scrape-listing-editor';
+  CalendarPriceScrapeError,
+  normalizeCalendarPriceRequest,
+  scrapeCalendarPrices,
+  type CalendarPriceScrapeRequest,
+} from '../playwright/scrape-calendar-prices';
 
-interface ScrapeListingEditorBody {
+interface ScrapeCalendarPricesBody {
   host_id: string;
+  property_id?: string;
   listing_id: string;
-  paths?: string[];
+  start_date: string;
+  end_date: string;
+  currency?: string;
+  dry_run?: boolean;
 }
 
-function isValidBody(body: unknown): body is ScrapeListingEditorBody {
+function isValidBody(body: unknown): body is ScrapeCalendarPricesBody {
   if (!body || typeof body !== 'object') return false;
-  const b = body as Partial<ScrapeListingEditorBody>;
+  const b = body as Partial<ScrapeCalendarPricesBody>;
   if (typeof b.host_id !== 'string' || b.host_id.length === 0) return false;
-  if (typeof b.listing_id !== 'string') return false;
+  if (b.property_id !== undefined && typeof b.property_id !== 'string') return false;
+  if (b.dry_run !== undefined && typeof b.dry_run !== 'boolean') return false;
   try {
-    normalizeListingId(b.listing_id);
-    normalizeRequestedPaths(b.paths);
+    normalizeCalendarPriceRequest(toCalendarRequest(b));
   } catch {
     return false;
   }
   return true;
 }
 
-function statusForListingEditorError(error: ListingEditorScrapeError): number {
+function toCalendarRequest(body: Partial<ScrapeCalendarPricesBody>): CalendarPriceScrapeRequest {
+  return {
+    listing_id: body.listing_id ?? '',
+    start_date: body.start_date ?? '',
+    end_date: body.end_date ?? '',
+    currency: body.currency,
+  };
+}
+
+function statusForCalendarPriceScrapeError(error: CalendarPriceScrapeError): number {
   switch (error.code) {
-    case 'listing_id_mismatch':
-      return 409;
-    case 'no_pages_scraped':
+    case 'blocked_by_airbnb':
+      return 429;
+    case 'invalid_cookies':
+      return 401;
+    case 'listing_mismatch':
+      return 403;
+    case 'no_dates_found':
       return 502;
   }
 }
 
-export function scrapeListingEditorHandler(env: MachineEnv) {
+export function scrapeCalendarPricesHandler(env: MachineEnv) {
   return async (req: Request, res: Response) => {
     if (!isValidBody(req.body)) {
       return res.status(400).json({ error: 'malformed_body' });
@@ -57,7 +73,9 @@ export function scrapeListingEditorHandler(env: MachineEnv) {
       return res.status(403).json({ error: 'host_id_mismatch' });
     }
 
-    const lease = tryAcquireSingleFlight('scrape-listing-editor');
+    const request = normalizeCalendarPriceRequest(toCalendarRequest(req.body));
+    const lockKey = `scrape-calendar-prices:${req.body.property_id ?? request.listing_id}`;
+    const lease = tryAcquireSingleFlight(lockKey);
     if (!lease) {
       return res.status(409).json({
         error: 'scrape_already_running',
@@ -101,6 +119,7 @@ export function scrapeListingEditorHandler(env: MachineEnv) {
           message: err instanceof Error ? err.message : String(err),
         });
       }
+
       if (!sessionOk) {
         if (currentAuthEpoch() !== epochAtStart) {
           return res.status(503).json({ error: 'auth_epoch_changed' });
@@ -113,10 +132,7 @@ export function scrapeListingEditorHandler(env: MachineEnv) {
       }
 
       try {
-        const result = await scrapeListingEditor(ctx, {
-          listing_id: req.body.listing_id,
-          paths: req.body.paths,
-        });
+        const result = await scrapeCalendarPrices(ctx, { request });
 
         if (currentAuthEpoch() !== epochAtStart) {
           return res.status(503).json({ error: 'auth_epoch_changed' });
@@ -127,8 +143,8 @@ export function scrapeListingEditorHandler(env: MachineEnv) {
         if (currentAuthEpoch() !== epochAtStart) {
           return res.status(503).json({ error: 'auth_epoch_changed' });
         }
-        if (err instanceof ListingEditorScrapeError) {
-          return res.status(statusForListingEditorError(err)).json({
+        if (err instanceof CalendarPriceScrapeError) {
+          return res.status(statusForCalendarPriceScrapeError(err)).json({
             error: err.code,
             message: err.message,
           });
@@ -144,7 +160,8 @@ export function scrapeListingEditorHandler(env: MachineEnv) {
   };
 }
 
-export const __scrapeListingEditorEndpointTestHooks = {
+export const __scrapeCalendarPricesEndpointTestHooks = {
   isValidBody,
-  statusForListingEditorError,
+  statusForCalendarPriceScrapeError,
+  toCalendarRequest,
 };
