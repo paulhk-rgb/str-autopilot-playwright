@@ -7,7 +7,7 @@
 
 import type { Request, Response } from 'express';
 import type { MachineEnv } from '../lib/env';
-import { tryAcquireSingleFlight } from '../lib/single-flight';
+import { getSingleFlightSnapshot, tryAcquireSingleFlight } from '../lib/single-flight';
 import { currentAuthEpoch, isAuthEpochReady } from '../playwright/auth-epoch';
 import { getBrowserContext, readAirbnbSessionStrict } from '../playwright/browser';
 import {
@@ -47,6 +47,19 @@ function statusForMarketScrapeError(error: MarketScrapeError): number {
   }
 }
 
+function marketSingleFlightOperation(
+  body: ScrapeMarketPricesBody,
+  market = normalizeMarketConfig(body.market),
+): string {
+  const datesKey = market.target_dates?.length
+    ? market.target_dates.join(',')
+    : `horizon:${market.horizon_days}`;
+  const nightKey = market.night_counts.join(',');
+  const bedroomKey = market.bedroom_counts.join(',');
+  const locationKey = market.location.trim().toLowerCase();
+  return `scrape-market-prices:${body.host_id}:${locationKey}:dates:${datesKey}:nights:${nightKey}:bedrooms:${bedroomKey}`;
+}
+
 export function scrapeMarketPricesHandler(env: MachineEnv) {
   return async (req: Request, res: Response) => {
     if (!isValidBody(req.body)) {
@@ -57,9 +70,13 @@ export function scrapeMarketPricesHandler(env: MachineEnv) {
       return res.status(403).json({ error: 'host_id_mismatch' });
     }
 
-    const lease = tryAcquireSingleFlight(`scrape-market-prices:${req.body.property_id}`);
+    const market = normalizeMarketConfig(req.body.market);
+    const lease = tryAcquireSingleFlight(marketSingleFlightOperation(req.body, market));
     if (!lease) {
-      return res.status(409).json({ error: 'scrape_already_running' });
+      return res.status(409).json({
+        error: 'scrape_already_running',
+        single_flight: getSingleFlightSnapshot(),
+      });
     }
 
     try {
@@ -112,7 +129,7 @@ export function scrapeMarketPricesHandler(env: MachineEnv) {
 
       try {
         const result = await scrapeMarketPrices(ctx, {
-          market: normalizeMarketConfig(req.body.market),
+          market,
         });
 
         if (currentAuthEpoch() !== epochAtStart) {
@@ -143,5 +160,6 @@ export function scrapeMarketPricesHandler(env: MachineEnv) {
 
 export const __scrapeMarketPricesEndpointTestHooks = {
   isValidBody,
+  marketSingleFlightOperation,
   statusForMarketScrapeError,
 };

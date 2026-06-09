@@ -7,7 +7,7 @@
 
 import type { Request, Response } from 'express';
 import type { MachineEnv } from '../lib/env';
-import { tryAcquireSingleFlight } from '../lib/single-flight';
+import { getSingleFlightSnapshot, tryAcquireSingleFlight } from '../lib/single-flight';
 import { currentAuthEpoch, isAuthEpochReady } from '../playwright/auth-epoch';
 import { getBrowserContext, readAirbnbSessionStrict } from '../playwright/browser';
 import {
@@ -77,7 +77,10 @@ export function scrapeCalendarPricesHandler(env: MachineEnv) {
     const lockKey = `scrape-calendar-prices:${req.body.property_id ?? request.listing_id}`;
     const lease = tryAcquireSingleFlight(lockKey);
     if (!lease) {
-      return res.status(409).json({ error: 'scrape_already_running' });
+      return res.status(409).json({
+        error: 'scrape_already_running',
+        single_flight: getSingleFlightSnapshot(),
+      });
     }
 
     try {

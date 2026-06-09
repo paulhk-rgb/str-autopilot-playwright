@@ -8,7 +8,7 @@
 
 import type { Request, Response } from 'express';
 import type { MachineEnv } from '../lib/env';
-import { tryAcquireSingleFlight } from '../lib/single-flight';
+import { getSingleFlightSnapshot, tryAcquireSingleFlight } from '../lib/single-flight';
 import { getBrowserContext, readAirbnbSessionStrict } from '../playwright/browser';
 import { currentAuthEpoch, isAuthEpochReady } from '../playwright/auth-epoch';
 import {
@@ -59,7 +59,10 @@ export function scrapeListingEditorHandler(env: MachineEnv) {
 
     const lease = tryAcquireSingleFlight('scrape-listing-editor');
     if (!lease) {
-      return res.status(409).json({ error: 'scrape_already_running' });
+      return res.status(409).json({
+        error: 'scrape_already_running',
+        single_flight: getSingleFlightSnapshot(),
+      });
     }
 
     try {

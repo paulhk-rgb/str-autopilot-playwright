@@ -23,6 +23,7 @@ const AIRBNB_USER_AGENT =
 
 let ctxPromise: Promise<BrowserContext> | null = null;
 let lastAirbnbRequestAt: Date | null = null;
+let cachedAirbnbSessionValid: boolean | null = null;
 
 export interface BrowserOptions {
   profileDir: string;
@@ -109,6 +110,7 @@ export async function hasAirbnbSession(ctx: BrowserContext): Promise<boolean> {
   try {
     return await readAirbnbSessionStrict(ctx);
   } catch {
+    cachedAirbnbSessionValid = false;
     return false;
   }
 }
@@ -123,7 +125,13 @@ export async function hasAirbnbSession(ctx: BrowserContext): Promise<boolean> {
 export async function readAirbnbSessionStrict(ctx: BrowserContext): Promise<boolean> {
   const cookies = await ctx.cookies('https://www.airbnb.com');
   const names = new Set(cookies.map((c) => c.name));
-  return names.has('_airbed_session_id') && names.has('_aat');
+  const valid = names.has('_airbed_session_id') && names.has('_aat');
+  cachedAirbnbSessionValid = valid;
+  return valid;
+}
+
+export function getCachedAirbnbSessionValid(): boolean | null {
+  return cachedAirbnbSessionValid;
 }
 
 /** Open a fresh page reusing the context. Callers MUST await page.close() when done. */

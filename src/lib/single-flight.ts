@@ -5,6 +5,12 @@ export interface SingleFlightLease {
   release: () => void;
 }
 
+export interface SingleFlightSnapshot {
+  operation: string;
+  elapsed_ms: number;
+  stale_after_ms: number;
+}
+
 interface LockState {
   operation: string;
   startedAtMs: number;
@@ -16,6 +22,16 @@ interface LockState {
 const STALE_LOCK_MS = 20 * 60_000;
 
 let currentLock: LockState | null = null;
+
+export function getSingleFlightSnapshot(): SingleFlightSnapshot | null {
+  if (!currentLock) return null;
+  const elapsedMs = Math.max(0, Math.round(performance.now() - currentLock.startedAtMs));
+  return {
+    operation: currentLock.operation,
+    elapsed_ms: elapsedMs,
+    stale_after_ms: STALE_LOCK_MS,
+  };
+}
 
 export function tryAcquireSingleFlight(operation: string): SingleFlightLease | null {
   const now = performance.now();

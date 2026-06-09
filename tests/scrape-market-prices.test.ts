@@ -17,7 +17,10 @@ vi.mock('../src/playwright/scrape-market-prices', async (importOriginal) => {
   };
 });
 
-import { scrapeMarketPricesHandler } from '../src/endpoints/scrape-market-prices';
+import {
+  __scrapeMarketPricesEndpointTestHooks,
+  scrapeMarketPricesHandler,
+} from '../src/endpoints/scrape-market-prices';
 import * as browserModule from '../src/playwright/browser';
 import * as marketScraperModule from '../src/playwright/scrape-market-prices';
 import {
@@ -189,6 +192,32 @@ describe('market price scraper guards', () => {
     );
   });
 
+  it('omits bedroom filters for shared multi-bedroom market searches', () => {
+    expect(__marketScraperTestHooks.buildAirbnbSearchUrl({
+      location: 'Portland, Maine',
+      checkIn: '2026-06-01',
+      checkOut: '2026-06-03',
+      adults: 2,
+      bedrooms: null,
+      currency: 'USD',
+    })).toBe(
+      'https://www.airbnb.com/s/Portland--Maine/homes?checkin=2026-06-01&checkout=2026-06-03&adults=2&currency=USD',
+    );
+  });
+
+  it('groups shared Airbnb results by parsed bedroom count', () => {
+    const grouped = __marketScraperTestHooks.groupListingsByBedroom([
+      { roomId: '101', bedrooms: 1, totalPrice: 200, nightCount: 1 },
+      { roomId: '202', bedrooms: 2, totalPrice: 300, nightCount: 1 },
+      { roomId: '303', bedrooms: 3, totalPrice: 400, nightCount: 1 },
+      { roomId: 'missing', totalPrice: 500, nightCount: 1 },
+    ], [1, 2]);
+
+    expect(grouped.get(1)?.map((listing) => listing.roomId)).toEqual(['101']);
+    expect(grouped.get(2)?.map((listing) => listing.roomId)).toEqual(['202']);
+    expect(grouped.has(3)).toBe(false);
+  });
+
   it('parses supported market price text without treating ratings as prices', () => {
     expect(__marketScraperTestHooks.parseMarketMoneyText('$1,234 total')).toBe(1234);
     expect(__marketScraperTestHooks.parseMarketMoneyText('€215.50 per night')).toBe(215.5);
@@ -206,6 +235,19 @@ describe('market price scraper guards', () => {
 });
 
 describe('/scrape-market-prices endpoint', () => {
+  it('uses a shared market single-flight key independent of property id', () => {
+    const first = __scrapeMarketPricesEndpointTestHooks.marketSingleFlightOperation(validBody);
+    const second = __scrapeMarketPricesEndpointTestHooks.marketSingleFlightOperation({
+      ...validBody,
+      property_id: 'property-2',
+    });
+
+    expect(second).toBe(first);
+    expect(first).toBe(
+      'scrape-market-prices:11111111-2222-3333-4444-555555555555:portland, maine:dates:horizon:2:nights:1,2:bedrooms:1,2',
+    );
+  });
+
   it('rejects malformed bodies before opening the browser', async () => {
     const { req, res, statusSpy } = buildReqRes({
       ...validBody,
@@ -273,6 +315,50 @@ describe('/scrape-market-prices endpoint', () => {
       }),
     );
     expect(jsonSpy).toHaveBeenCalledWith(expect.objectContaining({ schema_version: 1, success: true }));
+  });
+
+  it('reports the active single-flight operation when a market scrape is already running', async () => {
+    let resolveScrape: ((value: Awaited<ReturnType<typeof marketScraperModule.scrapeMarketPrices>>) => void) | null = null;
+    vi.mocked(marketScraperModule.scrapeMarketPrices).mockImplementationOnce(
+      () => new Promise((resolve) => {
+        resolveScrape = resolve;
+      }),
+    );
+    const first = buildReqRes(validBody);
+    const firstPromise = scrapeMarketPricesHandler(env)(first.req, first.res);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(marketScraperModule.scrapeMarketPrices).toHaveBeenCalledTimes(1);
+
+    const second = buildReqRes({ ...validBody, property_id: 'property-2' });
+    await scrapeMarketPricesHandler(env)(second.req, second.res);
+
+    expect(second.statusSpy).toHaveBeenCalledWith(409);
+    expect(second.jsonSpy).toHaveBeenCalledWith({
+      error: 'scrape_already_running',
+      single_flight: expect.objectContaining({
+        operation: 'scrape-market-prices:11111111-2222-3333-4444-555555555555:portland, maine:dates:horizon:2:nights:1,2:bedrooms:1,2',
+        elapsed_ms: expect.any(Number),
+        stale_after_ms: expect.any(Number),
+      }),
+    });
+
+    resolveScrape?.({
+      success: true,
+      schema_version: 1,
+      scrapedAt: '2026-06-01T00:00:00.000Z',
+      daysScraped: 1,
+      completedDays: 1,
+      dates: [],
+      diagnostics: {
+        dates_requested: 1,
+        dates_scraped: 1,
+        searches_attempted: 1,
+        searches_failed: 0,
+        blocked: false,
+        failed_searches: [],
+      },
+    });
+    await firstPromise;
   });
 
   it('maps Airbnb block detection to a retry-friendly rate-limit response', async () => {

@@ -76,7 +76,7 @@ interface RawSearchListing {
   roomId: string;
   name?: string;
   propertyType?: string;
-  bedrooms?: number;
+  bedrooms?: number | null;
   totalPrice: number;
   nightCount: number;
   rating?: number | null;
@@ -184,17 +184,19 @@ export function buildAirbnbSearchUrl(opts: {
   checkIn: string;
   checkOut: string;
   adults: number;
-  bedrooms: number;
+  bedrooms?: number | null;
   currency: string;
 }): string {
   const params = new URLSearchParams({
     checkin: opts.checkIn,
     checkout: opts.checkOut,
     adults: String(opts.adults),
-    min_bedrooms: String(opts.bedrooms),
-    max_bedrooms: String(opts.bedrooms),
-    currency: opts.currency,
   });
+  if (typeof opts.bedrooms === 'number') {
+    params.set('min_bedrooms', String(opts.bedrooms));
+    params.set('max_bedrooms', String(opts.bedrooms));
+  }
+  params.set('currency', opts.currency);
   return `https://www.airbnb.com/s/${encodeAirbnbLocation(opts.location)}/homes?${params.toString()}`;
 }
 
@@ -233,13 +235,38 @@ export async function scrapeMarketPrices(
   let searchesAttempted = 0;
   let searchesFailed = 0;
   let blocked = false;
+  const useSharedBedroomSearch = market.bedroom_counts.length > 1;
 
   const page = await openPage(ctx);
   try {
     for (const dateInfo of dateInfos) {
       const rawByBedroomNight = new Map<string, RawSearchListing[]>();
 
-      for (const bedrooms of market.bedroom_counts) {
+      if (useSharedBedroomSearch) {
+        for (const nights of market.night_counts) {
+          searchesAttempted++;
+          try {
+            const listings = await scrapeAirbnbSearch(page, market, dateInfo, null, nights, {
+              waitAfterLoadMs: opts.waitAfterLoadMs ?? DEFAULT_WAIT_AFTER_LOAD_MS,
+              allowedBedroomCounts: market.bedroom_counts,
+            });
+            for (const [bedrooms, bedroomListings] of groupListingsByBedroom(
+              listings,
+              market.bedroom_counts,
+            )) {
+              rawByBedroomNight.set(searchKey(bedrooms, nights), bedroomListings);
+            }
+          } catch (err) {
+            searchesFailed++;
+            const reason = reasonFromError(err);
+            if (reason === 'blocked_by_airbnb') blocked = true;
+            failedSearches.push({ date: dateInfo.checkIn, source: 'airbnb', reason });
+          }
+          if (blocked) break;
+          await sleep(opts.interSearchDelayMs ?? DEFAULT_INTER_SEARCH_DELAY_MS);
+        }
+      } else {
+        const bedrooms = market.bedroom_counts[0];
         for (const nights of market.night_counts) {
           searchesAttempted++;
           try {
@@ -256,7 +283,6 @@ export async function scrapeMarketPrices(
           if (blocked) break;
           await sleep(opts.interSearchDelayMs ?? DEFAULT_INTER_SEARCH_DELAY_MS);
         }
-        if (blocked) break;
       }
 
       let hotels: MarketHotelRecord[] = [];
@@ -306,9 +332,9 @@ async function scrapeAirbnbSearch(
   page: Page,
   market: MarketScrapeConfig,
   dateInfo: DateInfo,
-  bedrooms: number,
+  bedrooms: number | null,
   nights: number,
-  opts: { waitAfterLoadMs: number },
+  opts: { waitAfterLoadMs: number; allowedBedroomCounts?: number[] },
 ): Promise<RawSearchListing[]> {
   const url = buildAirbnbSearchUrl({
     location: market.location,
@@ -330,6 +356,7 @@ async function scrapeAirbnbSearch(
     bedrooms,
     nights,
     excludeListingIds: market.exclude_listing_ids,
+    allowedBedroomCounts: opts.allowedBedroomCounts,
   });
 }
 
@@ -391,7 +418,12 @@ async function scrapeBookingHotels(
 
 async function extractListingsFromPage(
   page: Page,
-  opts: { bedrooms: number; nights: number; excludeListingIds: string[] },
+  opts: {
+    bedrooms: number | null;
+    nights: number;
+    excludeListingIds: string[];
+    allowedBedroomCounts?: number[];
+  },
 ): Promise<RawSearchListing[]> {
   await scrollPage(page, MAX_SCROLLS);
   const listings = await page.evaluate((moneyPatternSource: string) => {
@@ -411,7 +443,7 @@ async function extractListingsFromPage(
       const lines = text.split('\n').map((line) => line.trim()).filter(Boolean);
       let name = '';
       let propertyType = '';
-      let bedrooms = 0;
+      let bedrooms: number | null = null;
       let totalPrice: number | null = null;
       let nightlyPrice: number | null = null;
       let nightCount = 1;
@@ -480,7 +512,26 @@ async function extractListingsFromPage(
 
   return listings
     .filter((listing) => !opts.excludeListingIds.includes(listing.roomId))
-    .map((listing) => ({ ...listing, bedrooms: listing.bedrooms || opts.bedrooms, nightCount: opts.nights }));
+    .map((listing) => ({ ...listing, bedrooms: listing.bedrooms ?? opts.bedrooms ?? undefined, nightCount: opts.nights }))
+    .filter((listing) => {
+      if (!opts.allowedBedroomCounts) return true;
+      return typeof listing.bedrooms === 'number' && opts.allowedBedroomCounts.includes(listing.bedrooms);
+    });
+}
+
+function groupListingsByBedroom(
+  listings: RawSearchListing[],
+  bedroomCounts: number[],
+): Map<number, RawSearchListing[]> {
+  const grouped = new Map<number, RawSearchListing[]>();
+  for (const bedrooms of bedroomCounts) {
+    grouped.set(bedrooms, []);
+  }
+  for (const listing of listings) {
+    if (typeof listing.bedrooms !== 'number') continue;
+    grouped.get(listing.bedrooms)?.push(listing);
+  }
+  return grouped;
 }
 
 function processDateResults(
@@ -501,7 +552,7 @@ function processDateResults(
         roomId: listing.roomId,
         name: listing.name,
         propertyType: listing.propertyType,
-        bedrooms: listing.bedrooms || bedrooms,
+        bedrooms: listing.bedrooms ?? bedrooms,
         price1Night: listing.totalPrice,
         minStay: 1,
         rating: listing.rating,
@@ -527,7 +578,7 @@ function processDateResults(
             roomId: listing.roomId,
             name: listing.name,
             propertyType: listing.propertyType,
-            bedrooms: listing.bedrooms || bedrooms,
+            bedrooms: listing.bedrooms ?? bedrooms,
             price2NightTotal: listing.totalPrice,
             price2NightPerNight: perNight,
             minStay: nights,
@@ -713,5 +764,6 @@ export const __marketScraperTestHooks = {
   buildAirbnbSearchUrl,
   buildBookingSearchUrl,
   processDateResults,
+  groupListingsByBedroom,
   parseMarketMoneyText,
 };
