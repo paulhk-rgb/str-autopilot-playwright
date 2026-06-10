@@ -15,6 +15,13 @@ export interface MarketScrapeConfig {
   hotel_tax_multiplier: number;
   min_price: number;
   max_price: number;
+  /**
+   * Opt-in: run ONE unfiltered search per night count and split results by the
+   * bedroom text parsed from each card. Default (false) loops bedroom_counts
+   * with min_bedrooms/max_bedrooms URL filters — many Airbnb card variants
+   * don't print "N bedroom", so shared mode silently drops those listings.
+   */
+  shared_bedroom_search?: boolean;
 }
 
 export interface MarketListingRecord {
@@ -91,9 +98,16 @@ export class MarketScrapeError extends Error {
 }
 
 const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-const DEFAULT_WAIT_AFTER_LOAD_MS = 2_500;
-const DEFAULT_INTER_SEARCH_DELAY_MS = 1_000;
-const MAX_SCROLLS = 5;
+// Timing mirrors the proven production scraper (market-scraper-v3.js CONFIG):
+// 5s after load, 6 scrolls with >=1.5s settle, 3s between searches, and a
+// random 5-10s pause between dates.
+const DEFAULT_WAIT_AFTER_LOAD_MS = 5_000;
+const DEFAULT_INTER_SEARCH_DELAY_MS = 3_000;
+const DEFAULT_INTER_DATE_DELAY_MIN_MS = 5_000;
+const DEFAULT_INTER_DATE_DELAY_MAX_MS = 10_000;
+const SCROLL_DELAY_MS = 1_500;
+const SEARCH_CARDS_TIMEOUT_MS = 15_000;
+const MAX_SCROLLS = 6;
 const MAX_HORIZON_DAYS = 42;
 const MAX_TARGET_DATES = 120;
 const MARKET_MONEY_PATTERN_SOURCE = String.raw`(?:[$€£¥]\s*\d[\d,]*(?:\.\d{2})?|\b\d[\d,]*(?:\.\d{2})?\s*(?:USD|CAD|EUR|GBP|AUD|NZD|MXN)\b)`;
@@ -117,6 +131,7 @@ export function normalizeMarketConfig(input: unknown): MarketScrapeConfig {
   const hotelTaxMultiplier = typeof raw.hotel_tax_multiplier === 'number' ? raw.hotel_tax_multiplier : 1;
   const minPrice = Number.isInteger(raw.min_price) ? Number(raw.min_price) : 50;
   const maxPrice = Number.isInteger(raw.max_price) ? Number(raw.max_price) : 999;
+  const sharedBedroomSearch = raw.shared_bedroom_search === true;
 
   if (location.length < 2) throw new Error('invalid_market_location');
   if (!/^[A-Z]{3}$/.test(currency)) throw new Error('invalid_currency');
@@ -140,6 +155,7 @@ export function normalizeMarketConfig(input: unknown): MarketScrapeConfig {
     hotel_tax_multiplier: hotelTaxMultiplier,
     min_price: minPrice,
     max_price: maxPrice,
+    shared_bedroom_search: sharedBedroomSearch,
   };
 }
 
@@ -223,6 +239,7 @@ export async function scrapeMarketPrices(
     market: MarketScrapeConfig;
     waitAfterLoadMs?: number;
     interSearchDelayMs?: number;
+    interDateDelayMs?: number;
   },
 ): Promise<ScrapeMarketPricesResult> {
   const market = normalizeMarketConfig(opts.market);
@@ -235,26 +252,43 @@ export async function scrapeMarketPrices(
   let searchesAttempted = 0;
   let searchesFailed = 0;
   let blocked = false;
-  const useSharedBedroomSearch = market.bedroom_counts.length > 1;
+  const useSharedBedroomSearch = market.shared_bedroom_search === true && market.bedroom_counts.length > 1;
 
   const page = await openPage(ctx);
   try {
-    for (const dateInfo of dateInfos) {
+    for (const [dateIndex, dateInfo] of dateInfos.entries()) {
       const rawByBedroomNight = new Map<string, RawSearchListing[]>();
 
-      if (useSharedBedroomSearch) {
+      // Default: one min/max-filtered search per bedroom count (production
+      // behavior). Shared mode (opt-in) runs a single unfiltered search per
+      // night count and splits by parsed bedroom text.
+      const bedroomSearches: Array<number | null> = useSharedBedroomSearch
+        ? [null]
+        : market.bedroom_counts;
+
+      for (const bedrooms of bedroomSearches) {
         for (const nights of market.night_counts) {
           searchesAttempted++;
           try {
-            const listings = await scrapeAirbnbSearch(page, market, dateInfo, null, nights, {
+            const listings = await scrapeAirbnbSearch(page, market, dateInfo, bedrooms, nights, {
               waitAfterLoadMs: opts.waitAfterLoadMs ?? DEFAULT_WAIT_AFTER_LOAD_MS,
-              allowedBedroomCounts: market.bedroom_counts,
+              ...(bedrooms === null ? { allowedBedroomCounts: market.bedroom_counts } : {}),
             });
-            for (const [bedrooms, bedroomListings] of groupListingsByBedroom(
-              listings,
-              market.bedroom_counts,
-            )) {
-              rawByBedroomNight.set(searchKey(bedrooms, nights), bedroomListings);
+            if (listings.length === 0) {
+              // Zero extracted listings is a failed search, not an empty
+              // market — it usually means cards never rendered or parsing
+              // missed every card.
+              searchesFailed++;
+              failedSearches.push({ date: dateInfo.checkIn, source: 'airbnb', reason: 'zero_listings' });
+            } else if (bedrooms === null) {
+              for (const [groupedBedrooms, bedroomListings] of groupListingsByBedroom(
+                listings,
+                market.bedroom_counts,
+              )) {
+                rawByBedroomNight.set(searchKey(groupedBedrooms, nights), bedroomListings);
+              }
+            } else {
+              rawByBedroomNight.set(searchKey(bedrooms, nights), listings);
             }
           } catch (err) {
             searchesFailed++;
@@ -265,24 +299,7 @@ export async function scrapeMarketPrices(
           if (blocked) break;
           await sleep(opts.interSearchDelayMs ?? DEFAULT_INTER_SEARCH_DELAY_MS);
         }
-      } else {
-        const bedrooms = market.bedroom_counts[0];
-        for (const nights of market.night_counts) {
-          searchesAttempted++;
-          try {
-            const listings = await scrapeAirbnbSearch(page, market, dateInfo, bedrooms, nights, {
-              waitAfterLoadMs: opts.waitAfterLoadMs ?? DEFAULT_WAIT_AFTER_LOAD_MS,
-            });
-            rawByBedroomNight.set(searchKey(bedrooms, nights), listings);
-          } catch (err) {
-            searchesFailed++;
-            const reason = reasonFromError(err);
-            if (reason === 'blocked_by_airbnb') blocked = true;
-            failedSearches.push({ date: dateInfo.checkIn, source: 'airbnb', reason });
-          }
-          if (blocked) break;
-          await sleep(opts.interSearchDelayMs ?? DEFAULT_INTER_SEARCH_DELAY_MS);
-        }
+        if (blocked) break;
       }
 
       let hotels: MarketHotelRecord[] = [];
@@ -301,6 +318,11 @@ export async function scrapeMarketPrices(
       const dayData = processDateResults(dateInfo, market, rawByBedroomNight, hotels);
       dates.push(dayData);
       if (blocked) break;
+      if (dateIndex < dateInfos.length - 1) {
+        // Random jitter between dates mirrors production pacing and avoids a
+        // machine-regular request cadence that trips Airbnb's rate-limiter.
+        await sleep(resolveInterDateDelayMs(opts.interDateDelayMs));
+      }
     }
   } finally {
     await page.close().catch(() => undefined);
@@ -352,6 +374,15 @@ async function scrapeAirbnbSearch(
     throw new MarketScrapeError('blocked_by_airbnb');
   }
 
+  // Search cards render asynchronously after the document loads — wait for
+  // them explicitly. A timeout here is a failed search (not a block): the
+  // page loaded but never produced results.
+  try {
+    await page.waitForSelector('[itemprop="itemListElement"]', { timeout: SEARCH_CARDS_TIMEOUT_MS });
+  } catch {
+    throw new Error('no_cards_rendered');
+  }
+
   return extractListingsFromPage(page, {
     bedrooms,
     nights,
@@ -374,6 +405,16 @@ async function scrapeBookingHotels(
     currency: market.currency,
   });
   await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+  // Booking returns HTTP 202 + a chal_t= Cloudflare challenge that clears in
+  // ~5-8s; property cards only render after it does. Waiting on the card
+  // selector (not networkidle) is the proven production behavior. A timeout
+  // means the challenge never cleared — fail the hotel search rather than
+  // extracting from the challenge page.
+  try {
+    await page.waitForSelector('[data-testid="property-card"]', { timeout: SEARCH_CARDS_TIMEOUT_MS });
+  } catch {
+    throw new Error('no_cards_rendered');
+  }
   await page.waitForTimeout(opts.waitAfterLoadMs);
   await scrollPage(page, 3);
 
@@ -450,8 +491,11 @@ async function extractListingsFromPage(
       let rating: number | null = null;
       let reviewCount: number | null = null;
       const parseMoney = (value: string): number | null => {
-        const match = value.match(new RegExp(moneyPatternSource, 'i'));
-        const amount = match?.[0]?.match(/\d[\d,]*(?:\.\d{2})?/)?.[0];
+        const matches = value.match(new RegExp(moneyPatternSource, 'gi'));
+        if (!matches || matches.length === 0) return null;
+        // Lines with two+ money tokens are strikethrough/discount pairs — the
+        // crossed-out higher price prints first, the discounted price last.
+        const amount = matches[matches.length - 1].match(/\d[\d,]*(?:\.\d{2})?/)?.[0];
         if (!amount) return null;
         const parsed = Number(amount.replace(/,/g, ''));
         return Number.isFinite(parsed) ? parsed : null;
@@ -483,6 +527,10 @@ async function extractListingsFromPage(
             totalPrice = money;
           } else if (/night|per night/i.test(line) && nightlyPrice === null) {
             nightlyPrice = money;
+          } else if (totalPrice === null && /^\$\d[\d,]*(?:\s+\w+)?\s*(?:total)?$/.test(line)) {
+            // Bare anchored money line ("$215") — production's primary price
+            // pattern. Without this fallback such cards are silently dropped.
+            totalPrice = money;
           }
         }
 
@@ -616,7 +664,7 @@ async function isBlockedPage(page: Page): Promise<boolean> {
 async function scrollPage(page: Page, count: number): Promise<void> {
   for (let i = 0; i < count; i++) {
     await page.evaluate(() => window.scrollBy(0, 1000)).catch(() => undefined);
-    await page.waitForTimeout(400);
+    await page.waitForTimeout(SCROLL_DELAY_MS);
   }
 }
 
@@ -740,9 +788,15 @@ function withinPriceBounds(value: number, market: MarketScrapeConfig): boolean {
   return value >= market.min_price && value <= market.max_price;
 }
 
+/**
+ * Node-side mirror of the in-page parseMoney (kept in sync by tests): on
+ * multi-price lines (strikethrough/discount pairs) the LAST money token is the
+ * live discounted price.
+ */
 function parseMarketMoneyText(text: string): number | null {
-  const match = text.match(new RegExp(MARKET_MONEY_PATTERN_SOURCE, 'i'));
-  const amount = match?.[0]?.match(/\d[\d,]*(?:\.\d{2})?/)?.[0];
+  const matches = text.match(new RegExp(MARKET_MONEY_PATTERN_SOURCE, 'gi'));
+  if (!matches || matches.length === 0) return null;
+  const amount = matches[matches.length - 1].match(/\d[\d,]*(?:\.\d{2})?/)?.[0];
   if (!amount) return null;
   const parsed = Number(amount.replace(/,/g, ''));
   return Number.isFinite(parsed) ? parsed : null;
@@ -751,6 +805,12 @@ function parseMarketMoneyText(text: string): number | null {
 function reasonFromError(err: unknown): string {
   if (err instanceof MarketScrapeError) return err.code;
   return err instanceof Error ? err.message : String(err);
+}
+
+function resolveInterDateDelayMs(override?: number): number {
+  if (typeof override === 'number' && override >= 0) return override;
+  return DEFAULT_INTER_DATE_DELAY_MIN_MS +
+    Math.random() * (DEFAULT_INTER_DATE_DELAY_MAX_MS - DEFAULT_INTER_DATE_DELAY_MIN_MS);
 }
 
 function sleep(ms: number): Promise<void> {
@@ -766,4 +826,13 @@ export const __marketScraperTestHooks = {
   processDateResults,
   groupListingsByBedroom,
   parseMarketMoneyText,
+  resolveInterDateDelayMs,
+  timingDefaults: {
+    waitAfterLoadMs: DEFAULT_WAIT_AFTER_LOAD_MS,
+    interSearchDelayMs: DEFAULT_INTER_SEARCH_DELAY_MS,
+    interDateDelayMinMs: DEFAULT_INTER_DATE_DELAY_MIN_MS,
+    interDateDelayMaxMs: DEFAULT_INTER_DATE_DELAY_MAX_MS,
+    scrollDelayMs: SCROLL_DELAY_MS,
+    maxScrolls: MAX_SCROLLS,
+  },
 };

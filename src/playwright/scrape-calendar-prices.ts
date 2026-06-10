@@ -1,5 +1,6 @@
 import type { BrowserContext, Page } from 'playwright';
 import { openPage } from './browser';
+import { gotoWithRetry } from './navigation';
 
 export interface CalendarPriceScrapeRequest {
   listing_id: string;
@@ -100,7 +101,10 @@ export async function scrapeCalendarPrices(
   let blocked = false;
 
   try {
-    await gotoWithRetry(page, buildMulticalendarUrl(request.listing_id));
+    await gotoWithRetry(page, buildMulticalendarUrl(request.listing_id), {
+      urlIncludes: `/multicalendar/${request.listing_id}`,
+      readySelector: '[data-date]',
+    });
     await page.waitForLoadState('domcontentloaded', { timeout: 15_000 }).catch(() => undefined);
     await page.waitForTimeout(opts.waitAfterLoadMs ?? 2_000);
 
@@ -239,24 +243,6 @@ async function readSmartPricingEnabled(page: Page): Promise<boolean | null> {
   if (checked === 'true') return true;
   if (checked === 'false') return false;
   return null;
-}
-
-async function gotoWithRetry(page: Page, url: string): Promise<void> {
-  let lastError: unknown;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45_000 });
-      return;
-    } catch (err) {
-      lastError = err;
-      const message = err instanceof Error ? err.message : String(err);
-      if (!message.includes('ERR_ABORTED') && !message.includes('Timeout')) {
-        throw err;
-      }
-      await page.waitForTimeout(1_000 + attempt * 1_000);
-    }
-  }
-  throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
 async function waitForCalendarReady(page: Page): Promise<void> {
