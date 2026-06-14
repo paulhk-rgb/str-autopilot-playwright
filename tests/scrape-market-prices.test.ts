@@ -86,6 +86,7 @@ function buildReqRes(body: unknown): {
 }
 
 beforeEach(() => {
+  delete process.env.MARKET_LOCK_WAIT_MS;
   __resetSingleFlightForTesting();
   _resetAuthEpochForTesting();
   beginCookieInject();
@@ -359,6 +360,9 @@ describe('/scrape-market-prices endpoint', () => {
   });
 
   it('reports the active single-flight operation when a market scrape is already running', async () => {
+    // Shrink the bounded lock-wait so the contended call 409s promptly instead
+    // of waiting the 30s production window.
+    process.env.MARKET_LOCK_WAIT_MS = '20';
     let resolveScrape: ((value: Awaited<ReturnType<typeof marketScraperModule.scrapeMarketPrices>>) => void) | null = null;
     vi.mocked(marketScraperModule.scrapeMarketPrices).mockImplementationOnce(
       () => new Promise((resolve) => {
