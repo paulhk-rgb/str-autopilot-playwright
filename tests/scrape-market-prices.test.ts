@@ -20,7 +20,9 @@ vi.mock('../src/playwright/scrape-market-prices', async (importOriginal) => {
 import {
   __scrapeMarketPricesEndpointTestHooks,
   scrapeMarketPricesHandler,
+  scrapeMarketStatusHandler,
 } from '../src/endpoints/scrape-market-prices';
+import { __resetScrapeJobsForTesting } from '../src/lib/scrape-jobs';
 import * as browserModule from '../src/playwright/browser';
 import * as marketScraperModule from '../src/playwright/scrape-market-prices';
 import {
@@ -88,6 +90,7 @@ function buildReqRes(body: unknown): {
 beforeEach(() => {
   delete process.env.MARKET_LOCK_WAIT_MS;
   __resetSingleFlightForTesting();
+  __resetScrapeJobsForTesting();
   _resetAuthEpochForTesting();
   beginCookieInject();
   markAuthEpochReady();
@@ -325,7 +328,7 @@ describe('/scrape-market-prices endpoint', () => {
     expect(marketScraperModule.scrapeMarketPrices).not.toHaveBeenCalled();
   });
 
-  it('returns configured market scrape results', async () => {
+  it('runs the scrape as a background job and exposes the result via status', async () => {
     vi.mocked(marketScraperModule.scrapeMarketPrices).mockResolvedValueOnce({
       success: true,
       schema_version: 1,
@@ -346,7 +349,11 @@ describe('/scrape-market-prices endpoint', () => {
 
     await scrapeMarketPricesHandler(env)(req, res);
 
-    expect(statusSpy).toHaveBeenCalledWith(200);
+    // Start returns immediately with a job id (202), scrape runs in background.
+    expect(statusSpy).toHaveBeenCalledWith(202);
+    const startBody = jsonSpy.mock.calls[0][0] as { job_id: string; status: string };
+    expect(startBody.status).toBe('running');
+    expect(typeof startBody.job_id).toBe('string');
     expect(marketScraperModule.scrapeMarketPrices).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
@@ -356,7 +363,20 @@ describe('/scrape-market-prices endpoint', () => {
         }),
       }),
     );
-    expect(jsonSpy).toHaveBeenCalledWith(expect.objectContaining({ schema_version: 1, success: true }));
+
+    // Let the background job settle, then poll status for the completed result.
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const poll = buildReqRes({ host_id: validBody.host_id, job_id: startBody.job_id });
+    await scrapeMarketStatusHandler(env)(poll.req, poll.res);
+    expect(poll.statusSpy).toHaveBeenCalledWith(200);
+    expect(poll.jsonSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'complete',
+        result: expect.objectContaining({ schema_version: 1, success: true }),
+      }),
+    );
   });
 
   it('reports the active single-flight operation when a market scrape is already running', async () => {
@@ -406,7 +426,7 @@ describe('/scrape-market-prices endpoint', () => {
     await firstPromise;
   });
 
-  it('maps Airbnb block detection to a retry-friendly rate-limit response', async () => {
+  it('surfaces an Airbnb block as a failed job (blocked_by_airbnb)', async () => {
     vi.mocked(marketScraperModule.scrapeMarketPrices).mockRejectedValueOnce(
       new MarketScrapeError('blocked_by_airbnb'),
     );
@@ -414,10 +434,41 @@ describe('/scrape-market-prices endpoint', () => {
 
     await scrapeMarketPricesHandler(env)(req, res);
 
-    expect(statusSpy).toHaveBeenCalledWith(429);
-    expect(jsonSpy).toHaveBeenCalledWith({
-      error: 'blocked_by_airbnb',
-      message: 'blocked_by_airbnb',
+    expect(statusSpy).toHaveBeenCalledWith(202);
+    const jobId = (jsonSpy.mock.calls[0][0] as { job_id: string }).job_id;
+
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const poll = buildReqRes({ host_id: validBody.host_id, job_id: jobId });
+    await scrapeMarketStatusHandler(env)(poll.req, poll.res);
+    expect(poll.statusSpy).toHaveBeenCalledWith(200);
+    expect(poll.jsonSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'failed', error: 'blocked_by_airbnb' }),
+    );
+  });
+});
+
+describe('scrapeMarketStatusHandler', () => {
+  it('404s an unknown job id', async () => {
+    const { req, res, statusSpy, jsonSpy } = buildReqRes({
+      host_id: '11111111-2222-3333-4444-555555555555',
+      job_id: 'nope',
     });
+    await scrapeMarketStatusHandler(env)(req, res);
+    expect(statusSpy).toHaveBeenCalledWith(404);
+    expect(jsonSpy).toHaveBeenCalledWith({ error: 'job_not_found' });
+  });
+
+  it('400s a malformed status body', async () => {
+    const { req, res, statusSpy } = buildReqRes({ host_id: '11111111-2222-3333-4444-555555555555' });
+    await scrapeMarketStatusHandler(env)(req, res);
+    expect(statusSpy).toHaveBeenCalledWith(400);
+  });
+
+  it('403s a host_id mismatch', async () => {
+    const { req, res, statusSpy } = buildReqRes({ host_id: 'someone-else', job_id: 'x' });
+    await scrapeMarketStatusHandler(env)(req, res);
+    expect(statusSpy).toHaveBeenCalledWith(403);
   });
 });
