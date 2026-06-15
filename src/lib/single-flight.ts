@@ -58,6 +58,32 @@ export function tryAcquireSingleFlight(operation: string): SingleFlightLease | n
   };
 }
 
+/**
+ * Like `tryAcquireSingleFlight`, but instead of failing immediately when the
+ * machine is busy it polls for the lock up to `maxWaitMs`. This lets two
+ * legitimately-contending operations (a pricing market scrape and a message
+ * sync share one machine + one global lock) serialize gracefully rather than
+ * 409-ing each other: the later arrival waits for the in-flight op to release.
+ *
+ * Bounded on purpose — the caller's own request deadline must still cover
+ * `maxWaitMs` + the operation's own runtime, so a pathologically long holder
+ * still yields a null (→ 409) the caller can retry, never an unbounded hang.
+ */
+export async function acquireSingleFlightWithWait(
+  operation: string,
+  opts: { maxWaitMs: number; pollMs?: number },
+): Promise<SingleFlightLease | null> {
+  const pollMs = Math.max(25, opts.pollMs ?? 200);
+  const deadline = performance.now() + Math.max(0, opts.maxWaitMs);
+  for (;;) {
+    const lease = tryAcquireSingleFlight(operation);
+    if (lease) return lease;
+    if (performance.now() >= deadline) return null;
+    const remaining = deadline - performance.now();
+    await new Promise((resolve) => setTimeout(resolve, Math.min(pollMs, Math.max(1, remaining))));
+  }
+}
+
 export function __resetSingleFlightForTesting(): void {
   currentLock = null;
 }

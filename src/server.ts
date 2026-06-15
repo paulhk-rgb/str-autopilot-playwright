@@ -17,7 +17,7 @@ import { scrapeReservationListHandler } from './endpoints/scrape-reservation-lis
 import { scrapeReservationDetailsHandler } from './endpoints/scrape-reservation-details';
 import { scrapeListingEditorHandler } from './endpoints/scrape-listing-editor';
 import { scrapeCalendarPricesHandler } from './endpoints/scrape-calendar-prices';
-import { scrapeMarketPricesHandler } from './endpoints/scrape-market-prices';
+import { scrapeMarketPricesHandler, scrapeMarketStatusHandler } from './endpoints/scrape-market-prices';
 import { setMinimumStaysHandler } from './endpoints/set-minimum-stays';
 import { setPricesHandler } from './endpoints/set-prices';
 import { sendMessageHandler } from './endpoints/send-message';
@@ -76,6 +76,7 @@ function buildApp(env: ReturnType<typeof readEnv>) {
   app.post('/scrape-listing-editor', hmacAuth, scrapeListingEditorHandler(env));
   app.post('/scrape-calendar-prices', hmacAuth, scrapeCalendarPricesHandler(env));
   app.post('/scrape-market-prices', hmacAuth, scrapeMarketPricesHandler(env));
+  app.post('/scrape-market-status', hmacAuth, scrapeMarketStatusHandler(env));
   app.post('/set-minimum-stays', hmacAuth, setMinimumStaysHandler(env));
   app.post('/set-prices', hmacAuth, setPricesHandler(env));
   app.post('/send-message', hmacAuth, sendMessageHandler(env));
