@@ -1,5 +1,6 @@
 import type { BrowserContext, Locator, Page } from 'playwright';
 import { openPage } from './browser';
+import { gotoWithRetry } from './navigation';
 import { buildMulticalendarUrl } from './scrape-calendar-prices';
 
 export interface BrowserSetMinimumStaysDateRequest {
@@ -108,7 +109,10 @@ export async function setCalendarMinimumStays(
   const results: BrowserSetMinimumStayDateResult[] = [];
 
   try {
-    await gotoWithRetry(page, buildMulticalendarUrl(request.listing_id));
+    await gotoWithRetry(page, buildMulticalendarUrl(request.listing_id), {
+      urlIncludes: `/multicalendar/${request.listing_id}`,
+      readySelector: '[data-date]',
+    });
     await page.waitForLoadState('domcontentloaded', { timeout: 15_000 }).catch(() => undefined);
     await page.waitForTimeout(opts.waitAfterLoadMs ?? 2_000);
 
@@ -599,24 +603,6 @@ async function sidebarHidden(page: Page): Promise<boolean> {
     if (!(sidebar instanceof HTMLElement)) return true;
     return sidebar.offsetParent === null || sidebar.children.length === 0;
   }, SIDEBAR_SELECTOR).catch(() => false);
-}
-
-async function gotoWithRetry(page: Page, url: string): Promise<void> {
-  let lastError: unknown;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45_000 });
-      return;
-    } catch (err) {
-      lastError = err;
-      const message = err instanceof Error ? err.message : String(err);
-      if (!message.includes('ERR_ABORTED') && !message.includes('Timeout')) {
-        throw err;
-      }
-      await page.waitForTimeout(1_000 + attempt * 1_000);
-    }
-  }
-  throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
 async function waitForCalendarReady(page: Page): Promise<void> {

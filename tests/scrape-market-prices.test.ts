@@ -121,6 +121,20 @@ describe('market price scraper guards', () => {
     });
   });
 
+  it('defaults shared_bedroom_search to false and accepts explicit opt-in', () => {
+    const base = { location: 'Portland, Maine', horizon_days: 2 };
+
+    expect(__marketScraperTestHooks.normalizeMarketConfig(base).shared_bedroom_search).toBe(false);
+    expect(__marketScraperTestHooks.normalizeMarketConfig({
+      ...base,
+      shared_bedroom_search: 'yes',
+    }).shared_bedroom_search).toBe(false);
+    expect(__marketScraperTestHooks.normalizeMarketConfig({
+      ...base,
+      shared_bedroom_search: true,
+    }).shared_bedroom_search).toBe(true);
+  });
+
   it('accepts explicit target dates for user-selected scrape plans', () => {
     const config = __marketScraperTestHooks.normalizeMarketConfig({
       location: 'Portland, Maine',
@@ -223,6 +237,33 @@ describe('market price scraper guards', () => {
     expect(__marketScraperTestHooks.parseMarketMoneyText('€215.50 per night')).toBe(215.5);
     expect(__marketScraperTestHooks.parseMarketMoneyText('215 USD total before taxes')).toBe(215);
     expect(__marketScraperTestHooks.parseMarketMoneyText('4.8 out of 5 · 32 reviews')).toBeNull();
+  });
+
+  it('takes the last money token on strikethrough/discount price lines', () => {
+    expect(__marketScraperTestHooks.parseMarketMoneyText('$649 $589')).toBe(589);
+    expect(__marketScraperTestHooks.parseMarketMoneyText('$1,200 $999 for 2 nights')).toBe(999);
+    expect(__marketScraperTestHooks.parseMarketMoneyText('$215')).toBe(215);
+  });
+
+  it('uses production-derived wait, scroll, and pacing budgets', () => {
+    expect(__marketScraperTestHooks.timingDefaults).toEqual({
+      waitAfterLoadMs: 5_000,
+      interSearchDelayMs: 3_000,
+      interDateDelayMinMs: 5_000,
+      interDateDelayMaxMs: 10_000,
+      scrollDelayMs: 1_500,
+      maxScrolls: 6,
+    });
+  });
+
+  it('jitters the inter-date delay within 5-10s unless overridden', () => {
+    for (let i = 0; i < 25; i++) {
+      const delay = __marketScraperTestHooks.resolveInterDateDelayMs();
+      expect(delay).toBeGreaterThanOrEqual(5_000);
+      expect(delay).toBeLessThan(10_000);
+    }
+    expect(__marketScraperTestHooks.resolveInterDateDelayMs(0)).toBe(0);
+    expect(__marketScraperTestHooks.resolveInterDateDelayMs(1_234)).toBe(1_234);
   });
 
   it('does not contain legacy Paul-only market constants', () => {
