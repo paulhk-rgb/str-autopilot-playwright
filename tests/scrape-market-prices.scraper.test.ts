@@ -5,10 +5,22 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { BrowserContext } from 'playwright';
+
+// Keep openPage real (it just calls ctx.newPage); mock only the ephemeral
+// anonymous-browser launch so the anonymous-context path can be exercised
+// without spawning a real Chromium.
+vi.mock('../src/playwright/browser', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/playwright/browser')>();
+  return { ...actual, openAnonymousContext: vi.fn() };
+});
+
 import {
   scrapeMarketPrices,
   type MarketScrapeConfig,
 } from '../src/playwright/scrape-market-prices';
+import { openAnonymousContext } from '../src/playwright/browser';
+
+const mockOpenAnonymousContext = vi.mocked(openAnonymousContext);
 
 interface FakeCard {
   innerText: string;
@@ -93,10 +105,11 @@ function marketConfig(overrides: Partial<MarketScrapeConfig> = {}): MarketScrape
   };
 }
 
-const FAST_OPTS = { waitAfterLoadMs: 0, interSearchDelayMs: 0, interDateDelayMs: 0 };
+const FAST_OPTS = { waitAfterLoadMs: 0, interSearchDelayMs: 0, interDateDelayMs: 0, anonymous: false };
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  mockOpenAnonymousContext.mockReset();
 });
 
 describe('scrapeMarketPrices bedroom search modes', () => {
@@ -276,5 +289,72 @@ describe('scrapeMarketPrices price line parsing', () => {
       price1Night: 215,
     }));
     expect(result.diagnostics.searches_failed).toBe(0);
+  });
+});
+
+describe('scrapeMarketPrices anonymous (logged-out) search context', () => {
+  it('searches in the anonymous context, never the authed ctx, and closes both', async () => {
+    const { page } = createFakeSearchContext({
+      airbnbCardsForUrl: () => [
+        airbnbCard('101', ['Home in Portland', 'Cozy spot', '1 bedroom', '$150 for 1 night']),
+      ],
+    });
+
+    const anonContextClose = vi.fn(async () => undefined);
+    const anonContext = {
+      newPage: async () => page,
+      close: anonContextClose,
+    } as unknown as BrowserContext;
+    const anonBrowserClose = vi.fn(async () => undefined);
+    mockOpenAnonymousContext.mockResolvedValueOnce({
+      browser: { close: anonBrowserClose } as never,
+      context: anonContext,
+    });
+
+    // The authed ctx must NOT be touched for the public market search.
+    const authedNewPage = vi.fn(async () => {
+      throw new Error('authed ctx must not be used for anonymous market search');
+    });
+    const authedCtx = { newPage: authedNewPage } as unknown as BrowserContext;
+
+    const result = await scrapeMarketPrices(authedCtx, {
+      market: marketConfig({ bedroom_counts: [1] }),
+      waitAfterLoadMs: 0,
+      interSearchDelayMs: 0,
+      interDateDelayMs: 0,
+      anonymous: true,
+    });
+
+    expect(mockOpenAnonymousContext).toHaveBeenCalledTimes(1);
+    expect(authedNewPage).not.toHaveBeenCalled();
+    expect(anonContextClose).toHaveBeenCalledTimes(1);
+    expect(anonBrowserClose).toHaveBeenCalledTimes(1);
+    expect(result.dates[0].listings).toContainEqual(
+      expect.objectContaining({ roomId: '101', price1Night: 150 }),
+    );
+  });
+
+  it('falls back to the authed ctx when the anonymous launch fails', async () => {
+    const { ctx, page } = createFakeSearchContext({
+      airbnbCardsForUrl: () => [
+        airbnbCard('202', ['Home in Portland', 'Backup spot', '1 bedroom', '$175 for 1 night']),
+      ],
+    });
+
+    mockOpenAnonymousContext.mockRejectedValueOnce(new Error('chromium launch failed (OOM)'));
+
+    const result = await scrapeMarketPrices(ctx, {
+      market: marketConfig({ bedroom_counts: [1] }),
+      waitAfterLoadMs: 0,
+      interSearchDelayMs: 0,
+      interDateDelayMs: 0,
+      anonymous: true,
+    });
+
+    expect(mockOpenAnonymousContext).toHaveBeenCalledTimes(1);
+    expect(result.dates[0].listings).toContainEqual(
+      expect.objectContaining({ roomId: '202', price1Night: 175 }),
+    );
+    expect(page.close).toHaveBeenCalled();
   });
 });

@@ -7,7 +7,7 @@
  */
 
 import { chromium } from 'playwright';
-import type { BrowserContext, Page } from 'playwright';
+import type { Browser, BrowserContext, Page } from 'playwright';
 
 const STEALTH_ARGS = [
   '--disable-blink-features=AutomationControlled',
@@ -137,6 +137,39 @@ export function getCachedAirbnbSessionValid(): boolean | null {
 /** Open a fresh page reusing the context. Callers MUST await page.close() when done. */
 export async function openPage(ctx: BrowserContext): Promise<Page> {
   return ctx.newPage();
+}
+
+/**
+ * Open a throwaway, logged-OUT browser + context for public market/explore
+ * scraping.
+ *
+ * Airbnb soft rate-limits the AUTHENTICATED host session for explore searches:
+ * the first date's searches succeed, then every subsequent search returns a
+ * card-less page (`no_cards_rendered`, `blocked:false`). The throttle is
+ * account/IP-level and persists across pages. A clean context with NO Airbnb
+ * cookies dodges the per-account limit.
+ *
+ * The persistent context (launchPersistentContext) cannot spawn child contexts
+ * (`context.browser()` is null), so this launches a SEPARATE ephemeral Chromium
+ * sharing the same Xvfb display. Caller MUST close BOTH context and browser.
+ */
+export async function openAnonymousContext(opts?: {
+  headless?: boolean;
+}): Promise<{ browser: Browser; context: BrowserContext }> {
+  const browser = await chromium.launch({
+    headless: opts?.headless ?? false,
+    args: STEALTH_ARGS,
+    ignoreDefaultArgs: IGNORE_DEFAULT_ARGS,
+  });
+  const context = await browser.newContext({
+    viewport: { width: 1280, height: 800 },
+    userAgent: AIRBNB_USER_AGENT,
+    locale: 'en-US',
+    extraHTTPHeaders: {
+      'Accept-Language': 'en-US,en;q=0.9',
+    },
+  });
+  return { browser, context };
 }
 
 // ============================================================================

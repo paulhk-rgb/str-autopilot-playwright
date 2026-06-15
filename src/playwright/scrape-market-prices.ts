@@ -1,5 +1,5 @@
-import type { BrowserContext, Page } from 'playwright';
-import { openPage } from './browser';
+import type { Browser, BrowserContext, Page } from 'playwright';
+import { openAnonymousContext, openPage } from './browser';
 
 export interface MarketScrapeConfig {
   location: string;
@@ -240,6 +240,13 @@ export async function scrapeMarketPrices(
     waitAfterLoadMs?: number;
     interSearchDelayMs?: number;
     interDateDelayMs?: number;
+    /**
+     * Run the market/explore search in a logged-OUT ephemeral context to dodge
+     * Airbnb's per-account soft throttle. Default: on (unless
+     * MARKET_SCRAPE_ANONYMOUS=false). Falls back to the authed `ctx` if the
+     * anonymous launch fails.
+     */
+    anonymous?: boolean;
   },
 ): Promise<ScrapeMarketPricesResult> {
   const market = normalizeMarketConfig(opts.market);
@@ -254,7 +261,25 @@ export async function scrapeMarketPrices(
   let blocked = false;
   const useSharedBedroomSearch = market.shared_bedroom_search === true && market.bedroom_counts.length > 1;
 
-  const page = await openPage(ctx);
+  // Market/explore search runs in a logged-OUT context by default. Airbnb soft
+  // rate-limits the authenticated host session (first date succeeds, the rest
+  // return no_cards_rendered with blocked:false). A cookie-free ephemeral
+  // browser dodges the per-account throttle. Falls back to the authed `ctx` if
+  // the anonymous launch fails (e.g. OOM on the shared machine).
+  const useAnonymous = opts.anonymous ?? (process.env.MARKET_SCRAPE_ANONYMOUS !== 'false');
+  let anon: { browser: Browser; context: BrowserContext } | null = null;
+  let searchCtx: BrowserContext = ctx;
+  if (useAnonymous) {
+    try {
+      anon = await openAnonymousContext();
+      searchCtx = anon.context;
+    } catch {
+      anon = null;
+      searchCtx = ctx;
+    }
+  }
+
+  const page = await openPage(searchCtx);
   try {
     for (const [dateIndex, dateInfo] of dateInfos.entries()) {
       const rawByBedroomNight = new Map<string, RawSearchListing[]>();
@@ -326,6 +351,10 @@ export async function scrapeMarketPrices(
     }
   } finally {
     await page.close().catch(() => undefined);
+    if (anon) {
+      await anon.context.close().catch(() => undefined);
+      await anon.browser.close().catch(() => undefined);
+    }
   }
 
   if (dates.length === 0) {
