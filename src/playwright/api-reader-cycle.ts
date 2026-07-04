@@ -287,7 +287,7 @@ export async function runApiReaderCycle(
   // "no new messages" — surfacing ok:true here made targeted syncs silently
   // no-op (prod 2026-07-04). Fail the cycle so the dispatcher can react
   // (UI-read fallback / error propagation).
-  if (opts.targetRawThreadIds?.length && threads.length > 0 && threadsSucceeded === 0) {
+  if (opts.targetRawThreadIds?.length && threadsSucceeded === 0) {
     return finalize(
       {
         ...baseOutcome,

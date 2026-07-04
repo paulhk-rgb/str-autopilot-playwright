@@ -360,6 +360,56 @@ describe('syncHandler single-flight and budget semantics', () => {
     );
   });
 
+  it('surfaces the API failure when targeted UI recovery is cleanly empty (Codex P1)', async () => {
+    vi.mocked(browserModule.getBrowserContext).mockResolvedValueOnce({
+      pages: () => [{}],
+    } as never);
+    vi.mocked(apiCycleModule.runApiReaderCycle).mockResolvedValueOnce({
+      cycleId: 'cycle-target-api-fail',
+      cycleStartAuthEpoch: 1,
+      cycleEndAuthEpoch: 1,
+      authEpochAborted: false,
+      mode: 'api',
+      ok: false,
+      apiSkipReason: 'no_spa_observation',
+      apiMessages: [],
+      perThread: [],
+      totalApiMessagesEmitted: 0,
+      watermarkAdvancesApplied: {},
+      inboxHashUsed: 'h1',
+      threadHashUsed: 'h2',
+      clientVersionUsed: null,
+      elapsedMs: 5,
+    });
+    vi.mocked(scraperModule.scrapeInbox).mockResolvedValueOnce({
+      messages: [],
+      bookingsFound: 0,
+      errors: [],
+    });
+
+    const envWithApi: MachineEnv = {
+      ...env,
+      AIRBNB_API_USER_ID: '50758264',
+      AIRBNB_API_GLOBAL_USER_ID: 'Vmlld2VyOjUwNzU4MjY0',
+    };
+
+    const { req, res, statusSpy, jsonSpy } = buildReqRes({
+      host_id: HOST_ID,
+      mode: 'incremental',
+      target_thread_ids: ['2470285483'],
+    });
+    await syncHandler(envWithApi)(req, res);
+
+    expect(statusSpy).toHaveBeenCalledWith(200);
+    expect(callbackModule.postCallback).not.toHaveBeenCalled();
+    expect(jsonSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages_found: 0,
+        errors: ['target_api_failed: no_spa_observation'],
+      }),
+    );
+  });
+
   it('passes the env-pinned client version fallback into the API reader cycle', async () => {
     vi.mocked(browserModule.getBrowserContext).mockResolvedValueOnce({
       pages: () => [{}],

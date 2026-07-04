@@ -237,10 +237,11 @@ export function syncHandler(env: MachineEnv) {
               result: apiResult.diag,
             };
             errors.push(...uiResult.errors);
-            if (uiResult.messages.length === 0 && uiResult.errors.length > 0) {
-              // Both paths failed — keep the api reason alongside the UI
-              // errors so the app sees the full picture (and the empty
-              // closure batch stays suppressed below).
+            if (uiResult.messages.length === 0) {
+              // Recovery produced nothing — surface the api reason even when
+              // the UI read was "cleanly empty" (Codex P1: a clean-empty UI
+              // result would otherwise recreate the silent no-op this fix
+              // eliminates). The empty closure batch stays suppressed below.
               errors.push(`target_api_failed: ${apiResult.error}`);
             }
           }
