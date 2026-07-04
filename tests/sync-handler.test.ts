@@ -360,6 +360,100 @@ describe('syncHandler single-flight and budget semantics', () => {
     );
   });
 
+  it('UI-recovers only the dropped threads of a partially-failed targeted batch (Gemini P1)', async () => {
+    vi.mocked(browserModule.getBrowserContext).mockResolvedValueOnce({
+      pages: () => [{}],
+    } as never);
+    vi.mocked(apiCycleModule.runApiReaderCycle).mockResolvedValueOnce({
+      cycleId: 'cycle-target-partial',
+      cycleStartAuthEpoch: 1,
+      cycleEndAuthEpoch: 1,
+      authEpochAborted: false,
+      mode: 'api',
+      ok: true,
+      apiMessages: [
+        {
+          airbnb_message_id: 'airbnb-30308576054',
+          content: 'api message',
+          sender: 'guest',
+          timestamp: '2026-04-10T01:39:18.484Z',
+          conversation_airbnb_id: '2470285483',
+          guest_name: 'Soonbong Lee',
+          listing_name: 'Listing',
+        },
+      ],
+      perThread: [],
+      failedTargetRawThreadIds: ['9990001112'],
+      totalApiMessagesEmitted: 1,
+      watermarkAdvancesApplied: { '2470285483': 1775785158484 },
+      inboxHashUsed: 'h1',
+      threadHashUsed: 'h2',
+      clientVersionUsed: 'client',
+      elapsedMs: 25,
+    });
+    vi.mocked(scraperModule.scrapeInbox).mockResolvedValueOnce({
+      messages: [
+        {
+          airbnb_message_id: 'airbnb-40408576054',
+          content: 'ui recovered from dropped thread',
+          sender: 'guest',
+          timestamp: '2026-04-10T02:00:00.000Z',
+          conversation_airbnb_id: '9990001112',
+          guest_name: 'Other Guest',
+          listing_name: 'Listing',
+        },
+      ],
+      bookingsFound: 0,
+      errors: [],
+    });
+
+    const envWithApi: MachineEnv = {
+      ...env,
+      AIRBNB_API_USER_ID: '50758264',
+      AIRBNB_API_GLOBAL_USER_ID: 'Vmlld2VyOjUwNzU4MjY0',
+    };
+
+    const { req, res, statusSpy, jsonSpy } = buildReqRes({
+      host_id: HOST_ID,
+      mode: 'incremental',
+      target_thread_ids: ['2470285483', '9990001112'],
+    });
+    await syncHandler(envWithApi)(req, res);
+
+    expect(statusSpy).toHaveBeenCalledWith(200);
+    // UI recovery scoped to ONLY the dropped thread.
+    expect(scraperModule.scrapeInbox).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ targetThreadIds: ['9990001112'] }),
+    );
+    expect(callbackModule.postCallback).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: expect.objectContaining({
+          payload: expect.objectContaining({
+            messages: expect.arrayContaining([
+              expect.objectContaining({ airbnb_message_id: 'airbnb-30308576054' }),
+              expect.objectContaining({ airbnb_message_id: 'airbnb-40408576054' }),
+            ]),
+          }),
+        }),
+      }),
+    );
+    // API watermark advances for the SUCCEEDED threads still commit.
+    expect(watermarkMocks.save).toHaveBeenCalledWith({ '2470285483': 1775785158484 });
+    expect(jsonSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages_found: 2,
+        errors: [],
+        apiDiag: expect.objectContaining({
+          fallback: 'target_thread_api_authority_partial_ui_recovery',
+          failedTargetThreadIds: ['9990001112'],
+          apiMessagesEmitted: 1,
+          messagesEmitted: 2,
+        }),
+      }),
+    );
+  });
+
   it('surfaces the API failure when targeted UI recovery is cleanly empty (Codex P1)', async () => {
     vi.mocked(browserModule.getBrowserContext).mockResolvedValueOnce({
       pages: () => [{}],

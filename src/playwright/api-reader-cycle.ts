@@ -97,6 +97,11 @@ export interface CycleOutcome {
   inboxDiagnostics?: InboxDiagnostics;
   apiMessages: ScrapedMessage[];
   perThread: Array<ThreadDiagnostics>;
+  /** Targeted cycles only: raw ids of supplied target threads that were
+   *  dropped by a recoverable per-thread failure while the cycle as a whole
+   *  stayed ok. Callers should recover these via the UI reader (Gemini P1 —
+   *  a partially-failed targeted batch must not silently skip threads). */
+  failedTargetRawThreadIds?: string[];
   totalApiMessagesEmitted: number;
   watermarkAdvancesApplied: WatermarkMap;
   shadow?: ShadowDiagnostic;
@@ -219,6 +224,7 @@ export async function runApiReaderCycle(
   const watermarks = opts.watermarkStore.load();
   const apiMessagesAccum: ScrapedMessage[] = [];
   const perThread: ThreadDiagnostics[] = [];
+  const failedTargetRawThreadIds: string[] = [];
   let threadsSucceeded = 0;
   let firstThread = true;
   for (const t of threads) {
@@ -275,6 +281,7 @@ export async function runApiReaderCycle(
         );
       }
       perThread.push(threadResult.diagnostics);
+      if (opts.targetRawThreadIds?.length) failedTargetRawThreadIds.push(t.rawId);
       continue;
     }
     apiMessagesAccum.push(...threadResult.messages);
@@ -371,6 +378,7 @@ export async function runApiReaderCycle(
       inboxDiagnostics,
       apiMessages: apiMessagesAccum,
       perThread,
+      ...(opts.targetRawThreadIds?.length ? { failedTargetRawThreadIds } : {}),
       totalApiMessagesEmitted: apiMessagesAccum.length,
       watermarkAdvancesApplied,
       shadow,

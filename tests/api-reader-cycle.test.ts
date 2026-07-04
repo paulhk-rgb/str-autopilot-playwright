@@ -403,6 +403,9 @@ describe('runApiReaderCycle', () => {
     expect(out.ok).toBe(true);
     expect(out.apiSkipReason).toBeUndefined();
     expect(out.apiMessages.length).toBeGreaterThan(0);
+    // The dropped target is reported so the caller can UI-recover it
+    // (Gemini P1 — partial batch failure must not silently skip threads).
+    expect(out.failedTargetRawThreadIds).toEqual(['111111']);
   });
 
   it('elapsedMs is populated and start/end auth-epoch recorded', async () => {

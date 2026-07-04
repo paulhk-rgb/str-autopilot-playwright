@@ -202,12 +202,33 @@ export function syncHandler(env: MachineEnv) {
           if (!apiResult.error) {
             messages = apiResult.messages;
             bookingsFound = 0;
+            let partialUiMessageCount = 0;
+            let partialUiErrors: string[] = [];
+            if (apiResult.failedTargetRawThreadIds.length > 0) {
+              // Gemini P1: a partially-failed targeted batch must not silently
+              // skip the dropped threads — recover JUST those via the UI
+              // reader and merge (API messages stay authoritative on dedup).
+              const uiResult = await scrapeInbox(ctx, {
+                mode: req.body.mode,
+                since: req.body.since,
+                hostDisplayName: req.body.host_display_name,
+                targetThreadIds: apiResult.failedTargetRawThreadIds,
+              });
+              messages = mergeApiThenUiMessages(apiResult.messages, uiResult.messages);
+              partialUiMessageCount = uiResult.messages.length;
+              partialUiErrors = uiResult.errors;
+              errors.push(...uiResult.errors);
+            }
             apiDiag = {
-              fallback: 'target_thread_api_authority',
-              uiMessageCount: 0,
-              uiErrors: [],
+              fallback:
+                apiResult.failedTargetRawThreadIds.length > 0
+                  ? 'target_thread_api_authority_partial_ui_recovery'
+                  : 'target_thread_api_authority',
+              uiMessageCount: partialUiMessageCount,
+              uiErrors: partialUiErrors.slice(0, 10),
+              failedTargetThreadIds: apiResult.failedTargetRawThreadIds,
               apiMessagesEmitted: apiResult.messages.length,
-              messagesEmitted: apiResult.messages.length,
+              messagesEmitted: messages.length,
               error: null,
               result: apiResult.diag,
             };
@@ -615,10 +636,19 @@ async function runApiReaderEmissionCycle(
   diag: unknown;
   error: string | null;
   commitWatermarks: () => void;
+  /** Targeted cycles: target raw ids dropped by recoverable per-thread
+   *  failures while the cycle stayed ok — caller recovers these via UI. */
+  failedTargetRawThreadIds: string[];
 }> {
   const noop = () => undefined;
   if (!env.AIRBNB_API_USER_ID || !env.AIRBNB_API_GLOBAL_USER_ID) {
-    return { messages: [], diag: null, error: 'missing_api_user_id', commitWatermarks: noop };
+    return {
+      messages: [],
+      diag: null,
+      error: 'missing_api_user_id',
+      commitWatermarks: noop,
+      failedTargetRawThreadIds: [],
+    };
   }
   let page;
   try {
@@ -629,6 +659,7 @@ async function runApiReaderEmissionCycle(
       diag: null,
       error: 'no_page_available: ' + (err instanceof Error ? err.message : String(err)),
       commitWatermarks: noop,
+      failedTargetRawThreadIds: [],
     };
   }
   // Page-level listener is a redundant belt-and-suspenders alongside the
@@ -654,6 +685,7 @@ async function runApiReaderEmissionCycle(
       diag: sanitizeApiDiag(outcome),
       error: outcome.apiSkipReason ?? outcome.inboxFailureReason ?? 'unknown',
       commitWatermarks: noop,
+      failedTargetRawThreadIds: [],
     };
   }
   // Defer watermark persistence to caller (post-callback ack).
@@ -673,5 +705,6 @@ async function runApiReaderEmissionCycle(
     diag: sanitizeApiDiag(outcome),
     error: null,
     commitWatermarks,
+    failedTargetRawThreadIds: outcome.failedTargetRawThreadIds ?? [],
   };
 }
