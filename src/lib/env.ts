@@ -34,10 +34,14 @@ const MACHINE_PROFILE_DIR = '/data/profile';
 /** API-reader pinned defaults per spec §3. Each can be overridden via env to
  *  unblock the v0.3 hash-rotation recovery path without redeploying. */
 const DEFAULT_AIRBNB_API_KEY = 'd306zoyjsyarp7ifhu67rjxn52tv0t20'; // public web key
+// Observed live 2026-07-04 (SPA listener capture on machine 7845e10bee1ee8) —
+// Airbnb had rotated away from the previous pins. Stale pins self-heal via
+// observed values once any UI navigation runs; fresh pins just make the API
+// path work from cold boot.
 const DEFAULT_AIRBNB_API_INBOX_HASH =
-  'ebeb240346015c12be36d76fd7003cbef5658e1c6d2e60b3554280b3c081aeea';
+  'ac355053f175930eff99286bdfb7b2bf7c40db930b9757a09a4f1f74972b5836';
 const DEFAULT_AIRBNB_API_THREAD_HASH =
-  '9384287931cf3da66dd1fae72eb9d28e588de4066e05d34a657e30a9e9d2e9ef';
+  '40c8a7d9af0f10098129495d71e2c1eb6d7fc0b40cbd20e0ff17d24bf404a609';
 const DEFAULT_WATERMARKS_PATH = '/data/profile/watermarks.json';
 
 function parseInboxReaderMode(raw: string | undefined): 'ui' | 'shadow' | 'api' {
