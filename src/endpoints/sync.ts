@@ -199,22 +199,50 @@ export function syncHandler(env: MachineEnv) {
       if (env.INBOX_READER_MODE === 'ui') {
         if (targetThreadIds?.length && canRunApiReader(env)) {
           const apiResult = await runApiReaderEmissionCycle(ctx, env, targetThreadIds);
-          messages = apiResult.messages;
-          bookingsFound = 0;
-          apiDiag = {
-            fallback: 'target_thread_api_authority',
-            uiMessageCount: 0,
-            uiErrors: [],
-            apiMessagesEmitted: apiResult.messages.length,
-            messagesEmitted: apiResult.messages.length,
-            error: apiResult.error,
-            result: apiResult.diag,
-          };
-          if (apiResult.error) {
-            errors.push(`target_api_failed: ${apiResult.error}`);
-          } else {
+          if (!apiResult.error) {
+            messages = apiResult.messages;
+            bookingsFound = 0;
+            apiDiag = {
+              fallback: 'target_thread_api_authority',
+              uiMessageCount: 0,
+              uiErrors: [],
+              apiMessagesEmitted: apiResult.messages.length,
+              messagesEmitted: apiResult.messages.length,
+              error: null,
+              result: apiResult.diag,
+            };
             commitWatermarks = apiResult.commitWatermarks;
             commitApiWatermarksOnCallbackSuccess = true;
+          } else {
+            // API authority failed (gate skip, all target threads dropped,
+            // inbox failure, ...). A targeted sync must never silently no-op:
+            // recover via the UI reader, which also accepts targetThreadIds.
+            // Bonus: the UI navigation seeds the SPA listener, so the NEXT
+            // api cycle can pass the observation gate organically.
+            const uiResult = await scrapeInbox(ctx, {
+              mode: req.body.mode,
+              since: req.body.since,
+              hostDisplayName: req.body.host_display_name,
+              targetThreadIds,
+            });
+            messages = uiResult.messages;
+            bookingsFound = uiResult.bookingsFound;
+            apiDiag = {
+              fallback: 'target_thread_ui_recovery',
+              uiMessageCount: uiResult.messages.length,
+              uiErrors: uiResult.errors.slice(0, 10),
+              apiMessagesEmitted: 0,
+              messagesEmitted: uiResult.messages.length,
+              error: apiResult.error,
+              result: apiResult.diag,
+            };
+            errors.push(...uiResult.errors);
+            if (uiResult.messages.length === 0 && uiResult.errors.length > 0) {
+              // Both paths failed — keep the api reason alongside the UI
+              // errors so the app sees the full picture (and the empty
+              // closure batch stays suppressed below).
+              errors.push(`target_api_failed: ${apiResult.error}`);
+            }
           }
         } else {
           const uiResult = await scrapeInbox(ctx, {
@@ -513,6 +541,7 @@ async function runApiReaderShadowCycle(
     apiKey: env.AIRBNB_API_KEY,
     inboxHashFallback: env.AIRBNB_API_INBOX_HASH,
     threadHashFallback: env.AIRBNB_API_THREAD_HASH,
+    clientVersionFallback: env.AIRBNB_API_CLIENT_VERSION ?? undefined,
     watermarkStore,
     spa,
     targetRawThreadIds: targetThreadIds,
@@ -612,6 +641,7 @@ async function runApiReaderEmissionCycle(
     apiKey: env.AIRBNB_API_KEY,
     inboxHashFallback: env.AIRBNB_API_INBOX_HASH,
     threadHashFallback: env.AIRBNB_API_THREAD_HASH,
+    clientVersionFallback: env.AIRBNB_API_CLIENT_VERSION ?? undefined,
     watermarkStore,
     spa,
     targetRawThreadIds: targetThreadIds,

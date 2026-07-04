@@ -20,6 +20,10 @@ export interface MachineEnv {
   AIRBNB_API_KEY: string;                        // public web client key (default known)
   AIRBNB_API_INBOX_HASH: string;                 // pinned default per spec §3
   AIRBNB_API_THREAD_HASH: string;                // pinned default per spec §3
+  /** Env-pinned x-client-version fallback for the SPA-observation gate. No
+   *  baked default — Airbnb rotates it with web deploys. Optional so existing
+   *  MachineEnv literals stay valid; readEnv always populates it. */
+  AIRBNB_API_CLIENT_VERSION?: string | null;
   WATERMARKS_PATH: string;                       // /data/profile/watermarks.json by default
 }
 
@@ -121,6 +125,7 @@ export function readEnv(source: NodeJS.ProcessEnv = process.env): MachineEnv {
   const airbnbApiKey = (source.AIRBNB_API_KEY ?? '').trim() || DEFAULT_AIRBNB_API_KEY;
   const airbnbInboxHash = (source.AIRBNB_API_INBOX_HASH ?? '').trim() || DEFAULT_AIRBNB_API_INBOX_HASH;
   const airbnbThreadHash = (source.AIRBNB_API_THREAD_HASH ?? '').trim() || DEFAULT_AIRBNB_API_THREAD_HASH;
+  const airbnbClientVersion = (source.AIRBNB_API_CLIENT_VERSION ?? '').trim() || null;
   const watermarksPath = (source.WATERMARKS_PATH ?? '').trim() || DEFAULT_WATERMARKS_PATH;
 
   return {
@@ -135,6 +140,7 @@ export function readEnv(source: NodeJS.ProcessEnv = process.env): MachineEnv {
     AIRBNB_API_KEY: airbnbApiKey,
     AIRBNB_API_INBOX_HASH: airbnbInboxHash,
     AIRBNB_API_THREAD_HASH: airbnbThreadHash,
+    AIRBNB_API_CLIENT_VERSION: airbnbClientVersion,
     WATERMARKS_PATH: watermarksPath,
   };
 }

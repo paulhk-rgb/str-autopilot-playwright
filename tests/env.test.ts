@@ -146,6 +146,19 @@ describe('readEnv', () => {
     ).toThrow(/AIRBNB_API_USER_ID/);
   });
 
+  it('AIRBNB_API_CLIENT_VERSION defaults to null (no baked default — Airbnb rotates it)', () => {
+    const env = readEnv(VALID as NodeJS.ProcessEnv);
+    expect(env.AIRBNB_API_CLIENT_VERSION).toBeNull();
+  });
+
+  it('honors env-provided AIRBNB_API_CLIENT_VERSION and trims whitespace', () => {
+    const env = readEnv({
+      ...VALID,
+      AIRBNB_API_CLIENT_VERSION: '  1.2.3-web  ',
+    } as NodeJS.ProcessEnv);
+    expect(env.AIRBNB_API_CLIENT_VERSION).toBe('1.2.3-web');
+  });
+
   it('WATERMARKS_PATH defaults to /data/profile/watermarks.json', () => {
     const env = readEnv(VALID as NodeJS.ProcessEnv);
     expect(env.WATERMARKS_PATH).toBe('/data/profile/watermarks.json');
