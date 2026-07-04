@@ -91,11 +91,17 @@ export interface CycleOutcome {
     | 'auth_epoch_not_ready'
     | 'no_spa_observation'
     | 'inbox_failed'
-    | 'auth_epoch_changed';
+    | 'auth_epoch_changed'
+    | 'all_target_threads_failed';
   inboxFailureReason?: InboxFailureReason;
   inboxDiagnostics?: InboxDiagnostics;
   apiMessages: ScrapedMessage[];
   perThread: Array<ThreadDiagnostics>;
+  /** Targeted cycles only: raw ids of supplied target threads that were
+   *  dropped by a recoverable per-thread failure while the cycle as a whole
+   *  stayed ok. Callers should recover these via the UI reader (Gemini P1 —
+   *  a partially-failed targeted batch must not silently skip threads). */
+  failedTargetRawThreadIds?: string[];
   totalApiMessagesEmitted: number;
   watermarkAdvancesApplied: WatermarkMap;
   shadow?: ShadowDiagnostic;
@@ -218,6 +224,8 @@ export async function runApiReaderCycle(
   const watermarks = opts.watermarkStore.load();
   const apiMessagesAccum: ScrapedMessage[] = [];
   const perThread: ThreadDiagnostics[] = [];
+  const failedTargetRawThreadIds: string[] = [];
+  let threadsSucceeded = 0;
   let firstThread = true;
   for (const t of threads) {
     // Inter-thread jitter (skip before the first thread).
@@ -273,10 +281,29 @@ export async function runApiReaderCycle(
         );
       }
       perThread.push(threadResult.diagnostics);
+      if (opts.targetRawThreadIds?.length) failedTargetRawThreadIds.push(t.rawId);
       continue;
     }
     apiMessagesAccum.push(...threadResult.messages);
     perThread.push(threadResult.diagnostics);
+    threadsSucceeded += 1;
+  }
+
+  // Targeted reads: if EVERY supplied thread was dropped by a recoverable
+  // per-thread failure, the cycle produced nothing for reasons that are NOT
+  // "no new messages" — surfacing ok:true here made targeted syncs silently
+  // no-op (prod 2026-07-04). Fail the cycle so the dispatcher can react
+  // (UI-read fallback / error propagation).
+  if (opts.targetRawThreadIds?.length && threadsSucceeded === 0) {
+    return finalize(
+      {
+        ...baseOutcome,
+        apiSkipReason: 'all_target_threads_failed',
+        cycleEndAuthEpoch: currentAuthEpoch(),
+        perThread,
+      },
+      startedAt,
+    );
   }
 
   // 5. Final authEpoch check before emit (spec §2 invariant 7).
@@ -351,6 +378,7 @@ export async function runApiReaderCycle(
       inboxDiagnostics,
       apiMessages: apiMessagesAccum,
       perThread,
+      ...(opts.targetRawThreadIds?.length ? { failedTargetRawThreadIds } : {}),
       totalApiMessagesEmitted: apiMessagesAccum.length,
       watermarkAdvancesApplied,
       shadow,

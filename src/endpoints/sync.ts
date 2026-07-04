@@ -199,22 +199,72 @@ export function syncHandler(env: MachineEnv) {
       if (env.INBOX_READER_MODE === 'ui') {
         if (targetThreadIds?.length && canRunApiReader(env)) {
           const apiResult = await runApiReaderEmissionCycle(ctx, env, targetThreadIds);
-          messages = apiResult.messages;
-          bookingsFound = 0;
-          apiDiag = {
-            fallback: 'target_thread_api_authority',
-            uiMessageCount: 0,
-            uiErrors: [],
-            apiMessagesEmitted: apiResult.messages.length,
-            messagesEmitted: apiResult.messages.length,
-            error: apiResult.error,
-            result: apiResult.diag,
-          };
-          if (apiResult.error) {
-            errors.push(`target_api_failed: ${apiResult.error}`);
-          } else {
+          if (!apiResult.error) {
+            messages = apiResult.messages;
+            bookingsFound = 0;
+            let partialUiMessageCount = 0;
+            let partialUiErrors: string[] = [];
+            if (apiResult.failedTargetRawThreadIds.length > 0) {
+              // Gemini P1: a partially-failed targeted batch must not silently
+              // skip the dropped threads — recover JUST those via the UI
+              // reader and merge (API messages stay authoritative on dedup).
+              const uiResult = await scrapeInbox(ctx, {
+                mode: req.body.mode,
+                since: req.body.since,
+                hostDisplayName: req.body.host_display_name,
+                targetThreadIds: apiResult.failedTargetRawThreadIds,
+              });
+              messages = mergeApiThenUiMessages(apiResult.messages, uiResult.messages);
+              partialUiMessageCount = uiResult.messages.length;
+              partialUiErrors = uiResult.errors;
+              errors.push(...uiResult.errors);
+            }
+            apiDiag = {
+              fallback:
+                apiResult.failedTargetRawThreadIds.length > 0
+                  ? 'target_thread_api_authority_partial_ui_recovery'
+                  : 'target_thread_api_authority',
+              uiMessageCount: partialUiMessageCount,
+              uiErrors: partialUiErrors.slice(0, 10),
+              failedTargetThreadIds: apiResult.failedTargetRawThreadIds,
+              apiMessagesEmitted: apiResult.messages.length,
+              messagesEmitted: messages.length,
+              error: null,
+              result: apiResult.diag,
+            };
             commitWatermarks = apiResult.commitWatermarks;
             commitApiWatermarksOnCallbackSuccess = true;
+          } else {
+            // API authority failed (gate skip, all target threads dropped,
+            // inbox failure, ...). A targeted sync must never silently no-op:
+            // recover via the UI reader, which also accepts targetThreadIds.
+            // Bonus: the UI navigation seeds the SPA listener, so the NEXT
+            // api cycle can pass the observation gate organically.
+            const uiResult = await scrapeInbox(ctx, {
+              mode: req.body.mode,
+              since: req.body.since,
+              hostDisplayName: req.body.host_display_name,
+              targetThreadIds,
+            });
+            messages = uiResult.messages;
+            bookingsFound = uiResult.bookingsFound;
+            apiDiag = {
+              fallback: 'target_thread_ui_recovery',
+              uiMessageCount: uiResult.messages.length,
+              uiErrors: uiResult.errors.slice(0, 10),
+              apiMessagesEmitted: 0,
+              messagesEmitted: uiResult.messages.length,
+              error: apiResult.error,
+              result: apiResult.diag,
+            };
+            errors.push(...uiResult.errors);
+            if (uiResult.messages.length === 0) {
+              // Recovery produced nothing — surface the api reason even when
+              // the UI read was "cleanly empty" (Codex P1: a clean-empty UI
+              // result would otherwise recreate the silent no-op this fix
+              // eliminates). The empty closure batch stays suppressed below.
+              errors.push(`target_api_failed: ${apiResult.error}`);
+            }
           }
         } else {
           const uiResult = await scrapeInbox(ctx, {
@@ -513,6 +563,7 @@ async function runApiReaderShadowCycle(
     apiKey: env.AIRBNB_API_KEY,
     inboxHashFallback: env.AIRBNB_API_INBOX_HASH,
     threadHashFallback: env.AIRBNB_API_THREAD_HASH,
+    clientVersionFallback: env.AIRBNB_API_CLIENT_VERSION ?? undefined,
     watermarkStore,
     spa,
     targetRawThreadIds: targetThreadIds,
@@ -585,10 +636,19 @@ async function runApiReaderEmissionCycle(
   diag: unknown;
   error: string | null;
   commitWatermarks: () => void;
+  /** Targeted cycles: target raw ids dropped by recoverable per-thread
+   *  failures while the cycle stayed ok — caller recovers these via UI. */
+  failedTargetRawThreadIds: string[];
 }> {
   const noop = () => undefined;
   if (!env.AIRBNB_API_USER_ID || !env.AIRBNB_API_GLOBAL_USER_ID) {
-    return { messages: [], diag: null, error: 'missing_api_user_id', commitWatermarks: noop };
+    return {
+      messages: [],
+      diag: null,
+      error: 'missing_api_user_id',
+      commitWatermarks: noop,
+      failedTargetRawThreadIds: [],
+    };
   }
   let page;
   try {
@@ -599,6 +659,7 @@ async function runApiReaderEmissionCycle(
       diag: null,
       error: 'no_page_available: ' + (err instanceof Error ? err.message : String(err)),
       commitWatermarks: noop,
+      failedTargetRawThreadIds: [],
     };
   }
   // Page-level listener is a redundant belt-and-suspenders alongside the
@@ -612,6 +673,7 @@ async function runApiReaderEmissionCycle(
     apiKey: env.AIRBNB_API_KEY,
     inboxHashFallback: env.AIRBNB_API_INBOX_HASH,
     threadHashFallback: env.AIRBNB_API_THREAD_HASH,
+    clientVersionFallback: env.AIRBNB_API_CLIENT_VERSION ?? undefined,
     watermarkStore,
     spa,
     targetRawThreadIds: targetThreadIds,
@@ -623,6 +685,7 @@ async function runApiReaderEmissionCycle(
       diag: sanitizeApiDiag(outcome),
       error: outcome.apiSkipReason ?? outcome.inboxFailureReason ?? 'unknown',
       commitWatermarks: noop,
+      failedTargetRawThreadIds: [],
     };
   }
   // Defer watermark persistence to caller (post-callback ack).
@@ -642,5 +705,6 @@ async function runApiReaderEmissionCycle(
     diag: sanitizeApiDiag(outcome),
     error: null,
     commitWatermarks,
+    failedTargetRawThreadIds: outcome.failedTargetRawThreadIds ?? [],
   };
 }

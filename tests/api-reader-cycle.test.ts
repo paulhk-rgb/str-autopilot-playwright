@@ -353,6 +353,61 @@ describe('runApiReaderCycle', () => {
     );
   });
 
+  it('targeted api mode fails the cycle when EVERY target thread fails recoverably', async () => {
+    markAuthEpochReady();
+    // threadFixture's threadData.id decodes to a raw id that will NOT match
+    // these targets → identity_mismatch per thread (recoverable → dropped).
+    // With ALL targets dropped the cycle must NOT report ok:true/zero-emission
+    // (the silent no-op observed in prod 2026-07-04) — it must surface failure.
+    const { page } = makePage(() => ({ kind: 'json', body: threadFixture }));
+
+    const out = await runApiReaderCycle(page as never, {
+      mode: 'api',
+      hostNumericId: HOST,
+      globalUserId: 'g',
+      apiKey: 'k',
+      inboxHashFallback: 'aaa',
+      threadHashFallback: 'bbb',
+      watermarkStore: store,
+      spa: makeReadyListener(),
+      interThreadJitterMs: { minMs: 0, maxMs: 0 },
+      targetRawThreadIds: ['111111', '222222'],
+    });
+
+    expect(out.ok).toBe(false);
+    expect(out.apiSkipReason).toBe('all_target_threads_failed');
+    expect(out.perThread).toHaveLength(2);
+    expect(out.apiMessages).toHaveLength(0);
+  });
+
+  it('targeted api mode stays ok when at least one target thread succeeds', async () => {
+    markAuthEpochReady();
+    const td = (threadFixture.data as Record<string, unknown>).threadData as Record<string, unknown>;
+    const matchingRawId = decodeRelayId(td.id as string).raw;
+    const { page } = makePage(() => ({ kind: 'json', body: threadFixture }));
+
+    const out = await runApiReaderCycle(page as never, {
+      mode: 'api',
+      hostNumericId: HOST,
+      globalUserId: 'g',
+      apiKey: 'k',
+      inboxHashFallback: 'aaa',
+      threadHashFallback: 'bbb',
+      watermarkStore: store,
+      spa: makeReadyListener(),
+      interThreadJitterMs: { minMs: 0, maxMs: 0 },
+      // First target mismatches (dropped), second matches the fixture.
+      targetRawThreadIds: ['111111', matchingRawId],
+    });
+
+    expect(out.ok).toBe(true);
+    expect(out.apiSkipReason).toBeUndefined();
+    expect(out.apiMessages.length).toBeGreaterThan(0);
+    // The dropped target is reported so the caller can UI-recover it
+    // (Gemini P1 — partial batch failure must not silently skip threads).
+    expect(out.failedTargetRawThreadIds).toEqual(['111111']);
+  });
+
   it('elapsedMs is populated and start/end auth-epoch recorded', async () => {
     markAuthEpochReady();
     const startEpoch = currentAuthEpoch();
