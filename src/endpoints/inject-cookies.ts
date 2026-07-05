@@ -44,6 +44,50 @@ interface InjectCookiesBody {
   cookies: AirbnbCookie[];
 }
 
+/**
+ * Matches a real Airbnb domain cookie: `.airbnb.com`, `airbnb.ca`,
+ * `.www.airbnb.co.uk`, `airbnb.com.au`. The TLD shape is constrained to
+ * `<2-3 letters>` optionally + `.<2 letters>` (ccTLD/second-level) and anchored
+ * to `$`, so a lookalike like `airbnb.com.evil.com` does NOT match and is never
+ * promoted onto `.airbnb.com`.
+ */
+const AIRBNB_DOMAIN_RE = /(^|\.)airbnb\.[a-z]{2,3}(\.[a-z]{2})?$/i;
+/** Matches cookies already scoped to `.airbnb.com` (incl. `.www.airbnb.com`, `www.airbnb.com`). */
+const AIRBNB_DOTCOM_RE = /(^|\.)airbnb\.com$/i;
+
+/**
+ * Cross-TLD cookie normalization.
+ *
+ * Users behind a VPN or in a non-US locale log in on a country domain
+ * (airbnb.ca, airbnb.co.uk, airbnb.com.au, …), so Airbnb scopes their session
+ * cookies — including `_aat` and `_airbed_session_id` — to THAT TLD. This
+ * worker only ever navigates `www.airbnb.com`, so a `.airbnb.ca`-scoped `_aat`
+ * is never sent and auth silently fails (observed 2026-07-05: a Canadian login
+ * authenticated only after the .ca cookies were remapped to .com).
+ *
+ * For every Airbnb cookie NOT already scoped to `.airbnb.com`, synthesize a
+ * `.airbnb.com`-scoped copy so the token reaches airbnb.com. Originals are
+ * kept (harmless — they just won't be sent to .com). A native `.airbnb.com`
+ * cookie of the same name always wins: it is never overwritten, and only the
+ * first country-TLD cookie of a given name is promoted (deterministic).
+ */
+export function normalizeAirbnbCookiesToDotCom(cookies: AirbnbCookie[]): AirbnbCookie[] {
+  const hasDotCom = new Set<string>();
+  for (const c of cookies) {
+    if (AIRBNB_DOTCOM_RE.test(c.domain)) hasDotCom.add(c.name);
+  }
+  const out = [...cookies];
+  const promoted = new Set<string>();
+  for (const c of cookies) {
+    if (!AIRBNB_DOMAIN_RE.test(c.domain)) continue; // non-Airbnb cookie, leave alone
+    if (AIRBNB_DOTCOM_RE.test(c.domain)) continue; // already .com
+    if (hasDotCom.has(c.name) || promoted.has(c.name)) continue; // native .com wins / dedupe
+    out.push({ ...c, domain: '.airbnb.com' });
+    promoted.add(c.name);
+  }
+  return out;
+}
+
 function isValidCookieJar(body: unknown): body is InjectCookiesBody {
   if (!body || typeof body !== 'object') return false;
   const b = body as { cookies?: unknown };
@@ -63,7 +107,10 @@ export function injectCookiesHandler(env: MachineEnv) {
       return res.status(400).json({ status: 'error', reason: 'malformed_body' });
     }
 
-    const cookies = req.body.cookies;
+    // Normalize country-TLD session cookies (airbnb.ca/.co.uk/…) to also cover
+    // .airbnb.com — the only host this worker navigates. Without this, a
+    // VPN/non-US login's `_aat` never reaches airbnb.com and auth silently fails.
+    const cookies = normalizeAirbnbCookiesToDotCom(req.body.cookies);
     const names = new Set(cookies.map((c) => c.name));
     if (!names.has('_airbed_session_id') || !names.has('_aat')) {
       return res.status(400).json({ status: 'error', reason: 'invalid_cookies' });
