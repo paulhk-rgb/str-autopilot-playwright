@@ -45,15 +45,35 @@ interface InjectCookiesBody {
 }
 
 /**
- * Matches a real Airbnb domain cookie: `.airbnb.com`, `airbnb.ca`,
- * `.www.airbnb.co.uk`, `airbnb.com.au`. The TLD shape is constrained to
- * `<2-3 letters>` optionally + `.<2 letters>` (ccTLD/second-level) and anchored
- * to `$`, so a lookalike like `airbnb.com.evil.com` does NOT match and is never
- * promoted onto `.airbnb.com`.
+ * Explicit allowlist of Airbnb-operated domain suffixes (the part after
+ * `airbnb.`). A shape regex (`airbnb.<2-3 letters>`) was rejected by audit
+ * (Codex + GLM 2026-07-05): it would also promote a non-Airbnb lookalike like
+ * `airbnb.co` / `airbnb.xyz` onto `.airbnb.com`, a session-fixation vector if
+ * such a cookie ever entered the jar. Only real Airbnb country domains promote.
+ * A host on an unlisted TLD falls back to the pre-fix behavior (needs a `.com`
+ * cookie) — no worse than before, and extending the set is a one-line change.
  */
-const AIRBNB_DOMAIN_RE = /(^|\.)airbnb\.[a-z]{2,3}(\.[a-z]{2})?$/i;
-/** Matches cookies already scoped to `.airbnb.com` (incl. `.www.airbnb.com`, `www.airbnb.com`). */
-const AIRBNB_DOTCOM_RE = /(^|\.)airbnb\.com$/i;
+const AIRBNB_TLD_SUFFIXES = new Set<string>([
+  'com', 'ca', 'co.uk', 'com.au', 'de', 'fr', 'es', 'it', 'nl', 'pt', 'com.br',
+  'mx', 'co.in', 'com.tr', 'ru', 'jp', 'cn', 'com.hk', 'com.sg', 'com.tw',
+  'co.kr', 'co.nz', 'ie', 'ch', 'at', 'be', 'dk', 'se', 'no', 'fi', 'pl', 'cz',
+  'gr', 'com.co', 'cl', 'com.pe', 'com.ar', 'com.ec', 'is', 'hu', 'ro', 'sk',
+  'si', 'hr', 'rs', 'bg', 'lt', 'lv', 'ee', 'com.mt', 'co.id', 'com.my',
+  'co.th', 'com.vn', 'com.ph',
+]);
+
+/**
+ * Returns the Airbnb TLD suffix (e.g. `com`, `ca`, `co.uk`) for a cookie
+ * domain if — and only if — it is an allowlisted Airbnb domain. Leading dots
+ * and a leading `www.` are stripped first (`.www.airbnb.ca` → `ca`). Returns
+ * null for non-Airbnb or non-allowlisted domains.
+ */
+function airbnbTldSuffix(domain: string): string | null {
+  const host = domain.replace(/^\.+/, '').replace(/^www\./i, '').toLowerCase();
+  const m = /^airbnb\.([a-z.]+)$/.exec(host);
+  const suffix = m?.[1];
+  return suffix && AIRBNB_TLD_SUFFIXES.has(suffix) ? suffix : null;
+}
 
 /**
  * Cross-TLD cookie normalization.
@@ -65,22 +85,22 @@ const AIRBNB_DOTCOM_RE = /(^|\.)airbnb\.com$/i;
  * is never sent and auth silently fails (observed 2026-07-05: a Canadian login
  * authenticated only after the .ca cookies were remapped to .com).
  *
- * For every Airbnb cookie NOT already scoped to `.airbnb.com`, synthesize a
- * `.airbnb.com`-scoped copy so the token reaches airbnb.com. Originals are
- * kept (harmless — they just won't be sent to .com). A native `.airbnb.com`
- * cookie of the same name always wins: it is never overwritten, and only the
- * first country-TLD cookie of a given name is promoted (deterministic).
+ * For every allowlisted-Airbnb cookie NOT already scoped to `.airbnb.com`,
+ * synthesize a `.airbnb.com`-scoped copy so the token reaches airbnb.com.
+ * Originals are kept (harmless — they just won't be sent to .com). A native
+ * `.airbnb.com` cookie of the same name always wins: it is never overwritten,
+ * and only the first country-TLD cookie of a given name is promoted.
  */
 export function normalizeAirbnbCookiesToDotCom(cookies: AirbnbCookie[]): AirbnbCookie[] {
   const hasDotCom = new Set<string>();
   for (const c of cookies) {
-    if (AIRBNB_DOTCOM_RE.test(c.domain)) hasDotCom.add(c.name);
+    if (airbnbTldSuffix(c.domain) === 'com') hasDotCom.add(c.name);
   }
   const out = [...cookies];
   const promoted = new Set<string>();
   for (const c of cookies) {
-    if (!AIRBNB_DOMAIN_RE.test(c.domain)) continue; // non-Airbnb cookie, leave alone
-    if (AIRBNB_DOTCOM_RE.test(c.domain)) continue; // already .com
+    const suffix = airbnbTldSuffix(c.domain);
+    if (suffix === null || suffix === 'com') continue; // non-Airbnb/non-allowlisted, or already .com
     if (hasDotCom.has(c.name) || promoted.has(c.name)) continue; // native .com wins / dedupe
     out.push({ ...c, domain: '.airbnb.com' });
     promoted.add(c.name);

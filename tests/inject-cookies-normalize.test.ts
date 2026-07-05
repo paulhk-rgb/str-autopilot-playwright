@@ -72,6 +72,25 @@ describe('normalizeAirbnbCookiesToDotCom', () => {
     expect(domainsFor(out, '_aat')).toEqual(['airbnb.com.evil.com']);
   });
 
+  it('does NOT promote non-allowlisted airbnb.<tld> lookalikes (airbnb.co, airbnb.xyz, airbnb.io)', () => {
+    for (const bad of ['airbnb.co', 'airbnb.xyz', 'airbnb.io', '.airbnb.tv']) {
+      const out = normalizeAirbnbCookiesToDotCom([ck('_aat', bad, { value: 'x' })]);
+      expect(out.filter((c) => c.domain === '.airbnb.com')).toHaveLength(0);
+      expect(out).toHaveLength(1); // untouched, no promotion
+    }
+  });
+
+  it('a non-allowlisted lookalike does NOT shadow a real country-TLD cookie (dedupe order safe)', () => {
+    // Lookalike appears FIRST; the real .ca cookie must still be the one promoted.
+    const out = normalizeAirbnbCookiesToDotCom([
+      ck('_aat', 'airbnb.io', { value: 'attacker' }),
+      ck('_aat', '.airbnb.ca', { value: 'real' }),
+    ]);
+    const comCopies = out.filter((c) => c.name === '_aat' && c.domain === '.airbnb.com');
+    expect(comCopies).toHaveLength(1);
+    expect(comCopies[0].value).toBe('real');
+  });
+
   it('leaves non-Airbnb cookies untouched', () => {
     const out = normalizeAirbnbCookiesToDotCom([
       ck('session', '.datadome.co'),
