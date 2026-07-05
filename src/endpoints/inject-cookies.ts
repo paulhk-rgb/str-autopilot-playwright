@@ -44,6 +44,70 @@ interface InjectCookiesBody {
   cookies: AirbnbCookie[];
 }
 
+/**
+ * Explicit allowlist of Airbnb-operated domain suffixes (the part after
+ * `airbnb.`). A shape regex (`airbnb.<2-3 letters>`) was rejected by audit
+ * (Codex + GLM 2026-07-05): it would also promote a non-Airbnb lookalike like
+ * `airbnb.co` / `airbnb.xyz` onto `.airbnb.com`, a session-fixation vector if
+ * such a cookie ever entered the jar. Only real Airbnb country domains promote.
+ * A host on an unlisted TLD falls back to the pre-fix behavior (needs a `.com`
+ * cookie) — no worse than before, and extending the set is a one-line change.
+ */
+const AIRBNB_TLD_SUFFIXES = new Set<string>([
+  'com', 'ca', 'co.uk', 'com.au', 'de', 'fr', 'es', 'it', 'nl', 'pt', 'com.br',
+  'mx', 'co.in', 'com.tr', 'ru', 'jp', 'cn', 'com.hk', 'com.sg', 'com.tw',
+  'co.kr', 'co.nz', 'ie', 'ch', 'at', 'be', 'dk', 'se', 'no', 'fi', 'pl', 'cz',
+  'gr', 'com.co', 'cl', 'com.pe', 'com.ar', 'com.ec', 'is', 'hu', 'ro', 'sk',
+  'si', 'hr', 'rs', 'bg', 'lt', 'lv', 'ee', 'com.mt', 'co.id', 'com.my',
+  'co.th', 'com.vn', 'com.ph',
+]);
+
+/**
+ * Returns the Airbnb TLD suffix (e.g. `com`, `ca`, `co.uk`) for a cookie
+ * domain if — and only if — it is an allowlisted Airbnb domain. Leading dots
+ * and a leading `www.` are stripped first (`.www.airbnb.ca` → `ca`). Returns
+ * null for non-Airbnb or non-allowlisted domains.
+ */
+function airbnbTldSuffix(domain: string): string | null {
+  const host = domain.replace(/^\.+/, '').replace(/^www\./i, '').toLowerCase();
+  const m = /^airbnb\.([a-z.]+)$/.exec(host);
+  const suffix = m?.[1];
+  return suffix && AIRBNB_TLD_SUFFIXES.has(suffix) ? suffix : null;
+}
+
+/**
+ * Cross-TLD cookie normalization.
+ *
+ * Users behind a VPN or in a non-US locale log in on a country domain
+ * (airbnb.ca, airbnb.co.uk, airbnb.com.au, …), so Airbnb scopes their session
+ * cookies — including `_aat` and `_airbed_session_id` — to THAT TLD. This
+ * worker only ever navigates `www.airbnb.com`, so a `.airbnb.ca`-scoped `_aat`
+ * is never sent and auth silently fails (observed 2026-07-05: a Canadian login
+ * authenticated only after the .ca cookies were remapped to .com).
+ *
+ * For every allowlisted-Airbnb cookie NOT already scoped to `.airbnb.com`,
+ * synthesize a `.airbnb.com`-scoped copy so the token reaches airbnb.com.
+ * Originals are kept (harmless — they just won't be sent to .com). A native
+ * `.airbnb.com` cookie of the same name always wins: it is never overwritten,
+ * and only the first country-TLD cookie of a given name is promoted.
+ */
+export function normalizeAirbnbCookiesToDotCom(cookies: AirbnbCookie[]): AirbnbCookie[] {
+  const hasDotCom = new Set<string>();
+  for (const c of cookies) {
+    if (airbnbTldSuffix(c.domain) === 'com') hasDotCom.add(c.name);
+  }
+  const out = [...cookies];
+  const promoted = new Set<string>();
+  for (const c of cookies) {
+    const suffix = airbnbTldSuffix(c.domain);
+    if (suffix === null || suffix === 'com') continue; // non-Airbnb/non-allowlisted, or already .com
+    if (hasDotCom.has(c.name) || promoted.has(c.name)) continue; // native .com wins / dedupe
+    out.push({ ...c, domain: '.airbnb.com' });
+    promoted.add(c.name);
+  }
+  return out;
+}
+
 function isValidCookieJar(body: unknown): body is InjectCookiesBody {
   if (!body || typeof body !== 'object') return false;
   const b = body as { cookies?: unknown };
@@ -63,7 +127,10 @@ export function injectCookiesHandler(env: MachineEnv) {
       return res.status(400).json({ status: 'error', reason: 'malformed_body' });
     }
 
-    const cookies = req.body.cookies;
+    // Normalize country-TLD session cookies (airbnb.ca/.co.uk/…) to also cover
+    // .airbnb.com — the only host this worker navigates. Without this, a
+    // VPN/non-US login's `_aat` never reaches airbnb.com and auth silently fails.
+    const cookies = normalizeAirbnbCookiesToDotCom(req.body.cookies);
     const names = new Set(cookies.map((c) => c.name));
     if (!names.has('_airbed_session_id') || !names.has('_aat')) {
       return res.status(400).json({ status: 'error', reason: 'invalid_cookies' });
