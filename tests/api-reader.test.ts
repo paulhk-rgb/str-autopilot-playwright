@@ -2026,3 +2026,52 @@ describe('validateThreadResponse — RTB cards fixture (spec v1.17 emission)', (
     expect(rows[0].sender).toBe('guest');
   });
 });
+
+
+describe('validateThreadResponse — audit rejections locked (Kimi 2026-07-07)', () => {
+  const rtbFixture = JSON.parse(
+    readFileSync(join(FIXTURE_DIR, 'thread-with-rtb-cards.json'), 'utf8'),
+  ) as Record<string, unknown>;
+  const RTB_RAW_ID = '4242424242';
+  const RTB_GLOBAL_ID = Buffer.from('MessageThread:4242424242').toString('base64');
+  const RTB_HOST = '111111111';
+
+  it('soft-deleted first copy of an id does NOT suppress the live second copy', () => {
+    // Rejected P2: seenNumericIds only gains ids at candidate-push (post-filter),
+    // so a dropped (soft-deleted) copy never poisons the dup guard.
+    const cloned = JSON.parse(JSON.stringify(rtbFixture)) as Record<string, unknown>;
+    const td = (cloned.data as Record<string, unknown>).threadData as Record<string, unknown>;
+    const md = td.messageData as Record<string, unknown>;
+    const msgs = md.messages as Array<Record<string, unknown>>;
+    const live = msgs[0];
+    const deletedCopy = JSON.parse(JSON.stringify(live)) as Record<string, unknown>;
+    deletedCopy.isSoftDelete = true;
+    deletedCopy.deletedAtMs = '1783356999000';
+    msgs.unshift(deletedCopy); // deleted copy FIRST in page order
+    const result = validateThreadResponse(cloned, RTB_RAW_ID, RTB_HOST, RTB_GLOBAL_ID, 'fakehash');
+    if (!result.ok) throw new Error('unreachable');
+    const rows = result.messages.filter(m => m.airbnb_message_id === 'airbnb-31000000001');
+    expect(rows.length).toBe(1);
+    expect(rows[0].sender).toBe('guest');
+    expect(result.diagnostics.droppedSoftDelete).toBe(1);
+  });
+
+  it('STATIC_BULLETIN_CONTENT emits as system with bulletin token, never guest/host', () => {
+    const cloned = JSON.parse(JSON.stringify(rtbFixture)) as Record<string, unknown>;
+    const td = (cloned.data as Record<string, unknown>).threadData as Record<string, unknown>;
+    const md = td.messageData as Record<string, unknown>;
+    const msgs = md.messages as Array<Record<string, unknown>>;
+    const bulletin = JSON.parse(JSON.stringify(msgs[0])) as Record<string, unknown>;
+    bulletin.id = Buffer.from('Message:31000000006').toString('base64');
+    bulletin.opaqueId = '$1$31000000006$1783356500000';
+    bulletin.createdAtMs = '1783356500000';
+    bulletin.contentType = 'STATIC_BULLETIN_CONTENT';
+    bulletin.contentSubType = 'FIXTURE_BULLETIN';
+    msgs.push(bulletin);
+    const result = validateThreadResponse(cloned, RTB_RAW_ID, RTB_HOST, RTB_GLOBAL_ID, 'fakehash');
+    if (!result.ok) throw new Error('unreachable');
+    const row = result.messages.find(m => m.airbnb_message_id === 'airbnb-31000000006');
+    expect(row?.sender).toBe('system');
+    expect(row?.content).toBe('[bulletin:contentSubType:FIXTURE_BULLETIN]');
+  });
+});
