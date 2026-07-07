@@ -1,0 +1,292 @@
+{
+  "data": {
+    "threadData": {
+      "__typename": "MessageThread",
+      "id": "TWVzc2FnZVRocmVhZDo0MjQyNDI0MjQy",
+      "participants": {
+        "edges": [
+          {
+            "node": {
+              "__typename": "ParticipantAccount",
+              "accountId": "111111111",
+              "displayName": "[REDACTED:displayName]"
+            }
+          },
+          {
+            "node": {
+              "__typename": "ParticipantAccount",
+              "accountId": "222222222",
+              "displayName": "[REDACTED:displayName]"
+            }
+          }
+        ]
+      },
+      "messageData": {
+        "__typename": "MessageData",
+        "messages": [
+          {
+            "__typename": "Message",
+            "uuid": "00000000-0000-0000-0000-031000000001",
+            "threadId": "4242424242",
+            "id": "TWVzc2FnZTozMTAwMDAwMDAwMQ==",
+            "opaqueId": "$1$31000000001$1783355000000",
+            "contentType": "TEXT_CONTENT",
+            "contentSubType": "",
+            "hydratedContent": {
+              "__typename": "RichMessage",
+              "contentType": "TEXT",
+              "content": {
+                "__typename": "MessagingText",
+                "body": "[REDACTED:body]",
+                "bodyTranslated": "[REDACTED:bodyTranslated]"
+              }
+            },
+            "account": {
+              "__typename": "ParticipantAccount",
+              "accountId": "222222222",
+              "accountType": "USER"
+            },
+            "updatedAtMs": "1783355000000",
+            "createdAtMs": "1783355000000",
+            "isSoftDelete": false
+          },
+          {
+            "__typename": "Message",
+            "uuid": "00000000-0000-0000-0000-031000000002",
+            "threadId": "4242424242",
+            "id": "TWVzc2FnZTozMTAwMDAwMDAwMg==",
+            "opaqueId": "$1$31000000002$1783355837101",
+            "contentType": "TEMPLATE_CONTENT",
+            "contentSubType": "STAYS_RTB_CARD_REQUEST",
+            "hydratedContent": {
+              "__typename": "RichMessage",
+              "contentType": "TEMPLATE",
+              "content": {
+                "__typename": "MessagingCardV2",
+                "terminal": true,
+                "sections": [
+                  {
+                    "__typename": "MessagingCardSection",
+                    "sectionId": "tombstone_header",
+                    "sectionData": {
+                      "__typename": "MessagingTombstoneHeader",
+                      "kicker": {
+                        "__typename": "MessagingRichFormatText",
+                        "tags": [
+                          {
+                            "__typename": "MessagingHTMLText",
+                            "body": "[REDACTED:body]"
+                          }
+                        ]
+                      },
+                      "title": {
+                        "__typename": "MessagingRichFormatText",
+                        "tags": [
+                          {
+                            "__typename": "MessagingHTMLText",
+                            "body": "[REDACTED:body]"
+                          }
+                        ]
+                      },
+                      "trailingImagery": {
+                        "__typename": "StandardImage",
+                        "accessibilityText": "[REDACTED:accessibilityText]",
+                        "url": "https://example.com/fixture-image",
+                        "borderStyle": "SLIGHTLY_ROUNDED"
+                      }
+                    }
+                  }
+                ]
+              }
+            },
+            "account": {
+              "__typename": "ParticipantAccount",
+              "accountId": "222222222",
+              "accountType": "USER"
+            },
+            "updatedAtMs": "1783355837101",
+            "createdAtMs": "1783355837101",
+            "isSoftDelete": false
+          },
+          {
+            "__typename": "Message",
+            "uuid": "00000000-0000-0000-0000-031000000003",
+            "threadId": "4242424242",
+            "id": "TWVzc2FnZTozMTAwMDAwMDAwMw==",
+            "opaqueId": "$1$31000000003$1783356000000",
+            "contentType": "VIEWER_BASED_CONTENT",
+            "contentSubType": "STAYS_RTB_CARD_CONFIRMED",
+            "hydratedContent": {
+              "__typename": "RichMessage",
+              "contentType": "TEMPLATE",
+              "content": {
+                "__typename": "MessagingCardV2",
+                "sections": [
+                  {
+                    "__typename": "MessagingCardSection",
+                    "sectionId": "HEADER_TEXT",
+                    "sectionData": {
+                      "__typename": "MessagingHeaderText",
+                      "kicker": {
+                        "__typename": "MessagingRichFormatText",
+                        "tags": [
+                          {
+                            "__typename": "MessagingHTMLText",
+                            "body": "[REDACTED:body]"
+                          }
+                        ]
+                      },
+                      "title": {
+                        "__typename": "MessagingRichFormatText",
+                        "tags": [
+                          {
+                            "__typename": "MessagingHTMLText",
+                            "body": "[REDACTED:body]"
+                          }
+                        ]
+                      },
+                      "subtitle": {
+                        "__typename": "MessagingRichFormatText",
+                        "tags": [
+                          {
+                            "__typename": "MessagingHTMLText",
+                            "body": "[REDACTED:body]"
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  {
+                    "__typename": "MessagingCardSection",
+                    "sectionId": "IMAGERY",
+                    "sectionData": {
+                      "__typename": "StandardImage",
+                      "accessibilityText": "[REDACTED:accessibilityText]",
+                      "url": "https://example.com/fixture-image",
+                      "borderStyle": "SLIGHTLY_ROUNDED"
+                    }
+                  },
+                  {
+                    "__typename": "MessagingCardSection",
+                    "sectionId": "BUTTON",
+                    "sectionData": {
+                      "__typename": "MessagingButtonPanelV2",
+                      "type": "FULL_WIDTH",
+                      "buttons": [
+                        {
+                          "__typename": "MessagingButtonV2",
+                          "text": "[REDACTED:text]",
+                          "type": "SECONDARY",
+                          "messagingAction": {
+                            "__typename": "HomesHostOpenReservationDetailsAction",
+                            "url": "https://example.com/fixture-url",
+                            "confirmationCodeMA": "FIXTURECODE",
+                            "threadId": "4242424242"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            },
+            "account": {
+              "__typename": "ParticipantAccount",
+              "accountId": "111111111",
+              "accountType": "USER"
+            },
+            "updatedAtMs": "1783356000000",
+            "createdAtMs": "1783356000000",
+            "isSoftDelete": false
+          },
+          {
+            "__typename": "Message",
+            "uuid": "00000000-0000-0000-0000-031000000004",
+            "threadId": "4242424242",
+            "id": "TWVzc2FnZTozMTAwMDAwMDAwNA==",
+            "opaqueId": "$1$31000000004$1783356200000",
+            "contentType": "VIEWER_BASED_CONTENT",
+            "contentSubType": "REQUEST_STAY_ALTERATION_CARD",
+            "hydratedContent": {
+              "__typename": "RichMessage",
+              "contentType": "MESSAGING_DLS_ACTION_CARD",
+              "content": {
+                "__typename": "MessagingDLSActionCardV1",
+                "accessibilityTextNonNull": "[REDACTED:accessibilityTextNonNull]",
+                "headerV2": {
+                  "__typename": "MessagingActionCardHeaderWrapperV2",
+                  "actionHeader": {
+                    "__typename": "MessagingActionCardHeader",
+                    "kicker": {
+                      "__typename": "MessagingRichText",
+                      "body": "[REDACTED:body]",
+                      "bodyTranslated": "[REDACTED:bodyTranslated]"
+                    },
+                    "title": {
+                      "__typename": "MessagingRichText",
+                      "body": "[REDACTED:body]",
+                      "bodyTranslated": "[REDACTED:bodyTranslated]"
+                    },
+                    "trailingImagery": {
+                      "__typename": "MessagingActionCardHeaderImagery",
+                      "image": {
+                        "__typename": "StandardImage",
+                        "accessibilityText": "[REDACTED:accessibilityText]",
+                        "url": "https://example.com/fixture-image",
+                        "borderStyle": "SLIGHTLY_ROUNDED"
+                      }
+                    }
+                  }
+                },
+                "actionPanel": {
+                  "__typename": "MessagingButtonPanel"
+                }
+              }
+            },
+            "account": {
+              "__typename": "ParticipantAccount",
+              "accountId": "2",
+              "accountType": "EXTERNAL_SERVICE"
+            },
+            "updatedAtMs": "1783356200000",
+            "createdAtMs": "1783356200000",
+            "isSoftDelete": false
+          },
+          {
+            "__typename": "Message",
+            "uuid": "00000000-0000-0000-0000-031000000005",
+            "threadId": "4242424242",
+            "id": "TWVzc2FnZTozMTAwMDAwMDAwNQ==",
+            "opaqueId": "$1$31000000005$1783356400000",
+            "contentType": "TEMPLATE_CONTENT",
+            "contentSubType": "STAYS_RTB_CARD_REQUEST",
+            "hydratedContent": {
+              "__typename": "RichMessage",
+              "contentType": "TEMPLATE",
+              "content": {
+                "__typename": "MessagingCardV2",
+                "terminal": true,
+                "sections": []
+              }
+            },
+            "account": {
+              "__typename": "ParticipantAccount",
+              "accountId": "222222222",
+              "accountType": "USER"
+            },
+            "updatedAtMs": "1783356400000",
+            "createdAtMs": "1783356400000",
+            "isSoftDelete": false
+          }
+        ],
+        "hasOlder": false,
+        "hasNewer": false,
+        "expandedCursorsSegment": {
+          "__typename": "CursorsSegment",
+          "earliestCursor": null,
+          "latestCursor": null
+        }
+      }
+    }
+  }
+}
