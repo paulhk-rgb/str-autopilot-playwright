@@ -28,7 +28,10 @@ import type { BrowserContext, Page } from 'playwright';
 export interface ScrapedMessage {
   airbnb_message_id: string;
   content: string;
-  sender: 'guest' | 'host';
+  /** 'system' = platform event (spec v1.17). The DOM leg itself never emits
+   *  system rows (dropped in scrapeInbox); the union is shared with the API
+   *  reader whose ScrapedMessage flows through the same callback batches. */
+  sender: 'guest' | 'host' | 'system';
   timestamp: string; // ISO8601 — best-effort; Airbnb's aria-label is relative ("2 days ago")
   conversation_airbnb_id: string;
   guest_name?: string;
@@ -781,6 +784,30 @@ async function readThread(
       }
 
       if (text.endsWith(' .')) text = text.slice(0, -2);
+
+      // Card/system DOM groups render as "<name> sent <text>" where <text> is
+      // Airbnb's own fallback copy, not anything a person wrote. Classify as
+      // system so they are dropped like "Airbnb service says" rows — prod
+      // 2026-07-07 emitted one card under BOTH senders with these strings.
+      // Exact list (mirrors staysync system-message-artifacts.ts), never
+      // prefixes: a guest can legitimately type text starting "Suggestion:".
+      if (senderType !== 'system') {
+        const normalized = text
+          .normalize('NFKC')
+          .replace(/[\u200b-\u200d\ufeff]/g, '')
+          .replace(/[\u00a0\u202f]/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim()
+          .toLowerCase();
+        const cardArtifacts = [
+          'message but description not available',
+          'suggestion: change reservation',
+        ];
+        if (cardArtifacts.indexOf(normalized) !== -1) {
+          senderType = 'system';
+          senderName = 'Airbnb';
+        }
+      }
 
       const heading = g.querySelector('h2');
       const dateHeading = heading?.textContent ?? '';

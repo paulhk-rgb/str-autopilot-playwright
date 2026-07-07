@@ -9,6 +9,7 @@ Sanitized real-Airbnb-API responses for `src/playwright/api-reader.ts` unit + in
 | `inbox-15-threads-mixed.json` | `ViaductInboxData` 2026-04-26 | 15 threads, includes 2/3-participant variants |
 | `thread-with-mixed-content.json` | `ViaductGetThreadAndDataQuery` 2026-04-26 | 15 messages: 12 TEXT, 1 VIEWER_BASED (STAYS_INSTANT_BOOKED), 1 TEMPLATE (STAY_ALTERATION_PENDING), 1 VIEWER_BASED (STAY_ALTERATION_ACCEPTED) |
 | `thread-with-media-content.json` | `ViaductGetThreadAndDataQuery` 2026-04-26 | 30 messages including MEDIA_CONTENT |
+| `thread-with-rtb-cards.json` | Hand-built from live probe 2026-07-07 (real shapes, ALL ids/values synthetic) | 5 messages: 1 TEXT, 1 TEMPLATE (STAYS_RTB_CARD_REQUEST, MessagingCardV2 sections/tombstone_header), 1 VIEWER_BASED (STAYS_RTB_CARD_CONFIRMED, sections/HEADER_TEXT), 1 VIEWER_BASED (REQUEST_STAY_ALTERATION_CARD, EXTERNAL_SERVICE accountId=2, headerV2.actionHeader), 1 TEMPLATE with EMPTY tombstone (the prod `[template:…]` leak class) |
 
 `STATIC_BULLETIN_CONTENT` was observed in another thread on the same day but isn't covered by these fixtures — extractor falls through to `[unsupported:contentType:STATIC_BULLETIN_CONTENT]` placeholder per spec §3 (P1-L). When probe v4 captures shape, add a fourth fixture.
 

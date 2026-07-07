@@ -760,7 +760,7 @@ describe('validateThreadResponse', () => {
     for (const m of result.messages) {
       expect(m.airbnb_message_id).toMatch(/^airbnb-\d{6,}$/);
       expect(m.conversation_airbnb_id).toBe(expectedRawId);
-      expect(['guest', 'host']).toContain(m.sender);
+      expect(['guest', 'host', 'system']).toContain(m.sender);
     }
   });
 
@@ -1320,7 +1320,7 @@ describe('validateThreadResponse', () => {
     expect(result.diagnostics.schemaFingerprintOk).toBe(true);
   });
 
-  it('drops VIEWER_BASED_CONTENT (system) messages from emission', () => {
+  it('emits VIEWER_BASED_CONTENT (system) messages with sender:system (spec v1.17)', () => {
     const result = validateThreadResponse(
       threadFixture,
       expectedRawId,
@@ -1329,9 +1329,14 @@ describe('validateThreadResponse', () => {
       'fakehash',
     );
     if (!result.ok) throw new Error('unreachable');
-    // None of the emitted messages should have system-style content from VIEWER_BASED.
-    // Mixed-content fixture has 1 VIEWER_BASED → expect droppedSystem >= 1.
-    expect(result.diagnostics.droppedSystem).toBeGreaterThanOrEqual(1);
+    // Mixed-content fixture has 2 VIEWER_BASED — system events now EMIT with
+    // sender 'system' instead of being dropped.
+    expect(result.diagnostics.systemEmitted).toBeGreaterThanOrEqual(1);
+    const systemRows = result.messages.filter(m => m.sender === 'system');
+    expect(systemRows.length).toBe(result.diagnostics.systemEmitted);
+    for (const m of systemRows) {
+      expect(m.airbnb_message_id).toMatch(/^airbnb-\d{6,}$/);
+    }
   });
 
   it('falls back to opaqueId when id is missing', () => {
@@ -1836,5 +1841,188 @@ describe('soft-delete guard', () => {
     );
     if (!result.ok) throw new Error('unreachable');
     expect(result.diagnostics.droppedSoftDelete).toBe(0);
+  });
+});
+
+
+// ============================================================================
+// Spec v1.17: system-event emission + card-shape extraction (probe 2026-07-07,
+// thread evidence: prod [template:STAYS_RTB_CARD_REQUEST] guest-bubble leak).
+// ============================================================================
+
+describe('extractText — card shapes (spec v1.17)', () => {
+  it('TEMPLATE_CONTENT USER with MessagingCardV2 sections tombstone resolves as user text', () => {
+    const result = extractText({
+      contentType: 'TEMPLATE_CONTENT',
+      contentSubType: 'STAYS_RTB_CARD_REQUEST',
+      account: { accountType: 'USER' },
+      hydratedContent: {
+        content: {
+          __typename: 'MessagingCardV2',
+          sections: [
+            {
+              sectionId: 'tombstone_header',
+              sectionData: {
+                __typename: 'MessagingTombstoneHeader',
+                kicker: { tags: [{ body: 'Requested' }] },
+                title: { tags: [{ body: 'Fixture Listing Name' }] },
+              },
+            },
+          ],
+        },
+      },
+    });
+    expect(result).toEqual({ kind: 'user', text: 'Requested: Fixture Listing Name' });
+  });
+
+  it('TEMPLATE_CONTENT USER with EMPTY tombstone emits system token, never user', () => {
+    const result = extractText({
+      contentType: 'TEMPLATE_CONTENT',
+      contentSubType: 'STAYS_RTB_CARD_REQUEST',
+      account: { accountType: 'USER' },
+      hydratedContent: { content: { __typename: 'MessagingCardV2', sections: [] } },
+    });
+    expect(result).toEqual({ kind: 'system', text: '[template:STAYS_RTB_CARD_REQUEST]' });
+  });
+
+  it('VIEWER_BASED_CONTENT with sections HEADER_TEXT resolves kicker/title/subtitle as system', () => {
+    const result = extractText({
+      contentType: 'VIEWER_BASED_CONTENT',
+      contentSubType: 'STAYS_RTB_CARD_CONFIRMED',
+      account: { accountType: 'USER' },
+      hydratedContent: {
+        content: {
+          __typename: 'MessagingCardV2',
+          sections: [
+            {
+              sectionId: 'HEADER_TEXT',
+              sectionData: {
+                __typename: 'MessagingHeaderText',
+                kicker: { tags: [{ body: 'Confirmed' }] },
+                title: { tags: [{ body: 'Fixture Listing Name' }] },
+                subtitle: { tags: [{ body: 'Jul 6 - 7, 2026' }] },
+              },
+            },
+          ],
+        },
+      },
+    });
+    expect(result).toEqual({
+      kind: 'system',
+      text: 'Confirmed: Fixture Listing Name — Jul 6 - 7, 2026',
+    });
+  });
+
+  it('VIEWER_BASED_CONTENT with headerV2.actionHeader (suggestion card) resolves as system', () => {
+    const result = extractText({
+      contentType: 'VIEWER_BASED_CONTENT',
+      contentSubType: 'REQUEST_STAY_ALTERATION_CARD',
+      account: { accountType: 'EXTERNAL_SERVICE' },
+      hydratedContent: {
+        content: {
+          __typename: 'MessagingDLSActionCardV1',
+          headerV2: {
+            actionHeader: {
+              kicker: { body: 'Fixture Listing Name' },
+              title: { body: 'Change reservation' },
+            },
+          },
+        },
+      },
+    });
+    expect(result).toEqual({
+      kind: 'system',
+      text: 'Fixture Listing Name: Change reservation',
+    });
+  });
+
+  it('TEMPLATE_CONTENT SERVICE with empty tombstone stays a system token', () => {
+    const result = extractText({
+      contentType: 'TEMPLATE_CONTENT',
+      contentSubType: 'STAY_ALTERATION_ACCEPTED',
+      account: { accountType: 'SERVICE' },
+      hydratedContent: { content: {} },
+    });
+    expect(result).toEqual({ kind: 'system', text: '[template:STAY_ALTERATION_ACCEPTED]' });
+  });
+});
+
+describe('validateThreadResponse — RTB cards fixture (spec v1.17 emission)', () => {
+  const rtbFixture = JSON.parse(
+    readFileSync(join(FIXTURE_DIR, 'thread-with-rtb-cards.json'), 'utf8'),
+  ) as Record<string, unknown>;
+  const RTB_RAW_ID = '4242424242';
+  const RTB_GLOBAL_ID = Buffer.from('MessageThread:4242424242').toString('base64');
+  const RTB_HOST = '111111111';
+
+  function run(fixture: unknown = rtbFixture) {
+    return validateThreadResponse(fixture, RTB_RAW_ID, RTB_HOST, RTB_GLOBAL_ID, 'fakehash');
+  }
+
+  it('emits all five messages with one-sender-per-id and correct senders', () => {
+    const result = run();
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('unreachable');
+
+    const byId = new Map(result.messages.map(m => [m.airbnb_message_id, m]));
+    expect(result.messages.length).toBe(5);
+
+    // Plain guest text.
+    expect(byId.get('airbnb-31000000001')?.sender).toBe('guest');
+    // Resolved RTB request card — guest-authored action under the REAL sender.
+    expect(byId.get('airbnb-31000000002')?.sender).toBe('guest');
+    expect(byId.get('airbnb-31000000002')?.content).toBe('[REDACTED:body]: [REDACTED:body]');
+    // Confirmation card (VIEWER_BASED, host USER account) — system with resolved text.
+    expect(byId.get('airbnb-31000000003')?.sender).toBe('system');
+    expect(byId.get('airbnb-31000000003')?.content).toBe(
+      '[REDACTED:body]: [REDACTED:body] — [REDACTED:body]',
+    );
+    // Suggestion card from EXTERNAL_SERVICE (accountId=2, NOT a participant):
+    // origin-invariant exempt, emitted as system.
+    expect(byId.get('airbnb-31000000004')?.sender).toBe('system');
+    expect(byId.get('airbnb-31000000004')?.content).toBe(
+      '[REDACTED:body]: [REDACTED:body]',
+    );
+    // Empty-tombstone template — system token for server-side quarantine,
+    // NEVER guest text (the prod 2026-07-07 leak class).
+    expect(byId.get('airbnb-31000000005')?.sender).toBe('system');
+    expect(byId.get('airbnb-31000000005')?.content).toBe('[template:STAYS_RTB_CARD_REQUEST]');
+  });
+
+  it('tracks system emission diagnostics', () => {
+    const result = run();
+    if (!result.ok) throw new Error('unreachable');
+    expect(result.diagnostics.systemEmitted).toBe(3);
+    expect(result.diagnostics.emptyTemplateTombstones).toBe(1);
+    expect(result.diagnostics.droppedOriginInvariant).toBe(0);
+    expect(result.diagnostics.droppedSystem).toBe(0);
+    expect(result.diagnostics.messagesEmitted).toBe(5);
+  });
+
+  it('never emits a raw [template:...] token under guest or host sender', () => {
+    const result = run();
+    if (!result.ok) throw new Error('unreachable');
+    for (const m of result.messages) {
+      if (/^\[(template|viewer_based|bulletin|unsupported):/.test(m.content)) {
+        expect(m.sender).toBe('system');
+      }
+    }
+  });
+
+  it('duplicate message id within a page emits exactly once (one-id-one-sender)', () => {
+    const cloned = JSON.parse(JSON.stringify(rtbFixture)) as Record<string, unknown>;
+    const td = (cloned.data as Record<string, unknown>).threadData as Record<string, unknown>;
+    const md = td.messageData as Record<string, unknown>;
+    const msgs = md.messages as Array<Record<string, unknown>>;
+    // Duplicate the guest text message under a DIFFERENT account to simulate
+    // the both-senders fan-out defect class.
+    const dup = JSON.parse(JSON.stringify(msgs[0])) as Record<string, unknown>;
+    (dup.account as Record<string, unknown>).accountId = '111111111';
+    msgs.push(dup);
+    const result = run(cloned);
+    if (!result.ok) throw new Error('unreachable');
+    const rows = result.messages.filter(m => m.airbnb_message_id === 'airbnb-31000000001');
+    expect(rows.length).toBe(1);
+    expect(rows[0].sender).toBe('guest');
   });
 });

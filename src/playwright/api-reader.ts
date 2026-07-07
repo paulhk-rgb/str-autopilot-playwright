@@ -762,7 +762,9 @@ export async function listInboxViaApi(
 export interface ScrapedMessage {
   airbnb_message_id: string;
   content: string;
-  sender: 'guest' | 'host';
+  /** 'system' = platform-generated event (cards, confirmations) — spec v1.17;
+   *  accepted by the app's syncMessageItemSchema since staysync-app PR #643. */
+  sender: 'guest' | 'host' | 'system';
   /** ISO8601 — derived from `createdAtMs`. */
   timestamp: string;
   conversation_airbnb_id: string;
@@ -789,8 +791,15 @@ export interface ThreadDiagnostics {
   hostMembership: 'ok' | 'missing';
   messagesReturned: number;
   messagesEmitted: number;
+  /** System events emitted with sender:'system' (spec v1.17 — no longer dropped). */
+  systemEmitted: number;
+  /** USER templates whose card text could not be resolved — emitted as system
+   *  tokens for server-side quarantine. Non-zero = extraction gap to probe. */
+  emptyTemplateTombstones: number;
   droppedSoftDelete: number;
   droppedOrphanReaction: number;
+  /** Placeholder-kind drops (unknown contentType) + defensive drops. System
+   *  events emit since v1.17 and are counted in systemEmitted instead. */
   droppedSystem: number;
   droppedSchema: number;
   droppedOriginInvariant: number;
@@ -822,9 +831,10 @@ export type ThreadValidationOutcome =
 
 /**
  * Result of `extractText` — disposes a message into routable output.
- * `kind: 'system'` and `kind: 'placeholder'` are NEVER emitted to the callback
- * in v0 (parity with UI scraper which skips senderType==='system'); they are
- * surfaced in diagnostics only.
+ * Spec v1.17 §Parsing: `kind: 'system'` IS emitted to the callback with
+ * `sender: 'system'` (resolved card/confirmation text is host-visible context;
+ * unresolved tokens are quarantined server-side since staysync-app PR #643).
+ * `kind: 'placeholder'` is still dropped and surfaced in diagnostics only.
  */
 export type MessageExtract =
   | { kind: 'user'; text: string; mediaUris?: string[] }
@@ -838,6 +848,70 @@ const KNOWN_CONTENT_TYPES = [
   'TEMPLATE_CONTENT',
   'STATIC_BULLETIN_CONTENT',
 ] as const;
+
+/**
+ * Airbnb platform account types that are never thread participants and whose
+ * messages are always system events. Probe 2026-04-26 confirmed SERVICE;
+ * probe 2026-07-07 (thread 2587772765) observed EXTERNAL_SERVICE on
+ * REQUEST_STAY_ALTERATION_CARD suggestion cards.
+ */
+const SERVICE_ACCOUNT_TYPES = new Set(['SERVICE', 'EXTERNAL_SERVICE']);
+
+/**
+ * Text body of a Messaging rich-text node. Two probe-confirmed layouts:
+ *   - MessagingRichText:       { body: string }
+ *   - MessagingRichFormatText: { tags: [{ body: string }, ...] }
+ */
+function richTextBody(node: unknown): string {
+  if (!node || typeof node !== 'object') return '';
+  const n = node as Record<string, unknown>;
+  if (typeof n.body === 'string' && n.body) return n.body;
+  if (Array.isArray(n.tags)) {
+    const parts: string[] = [];
+    for (const tagUnknown of n.tags) {
+      const tag = tagUnknown as Record<string, unknown> | null;
+      if (typeof tag?.body === 'string' && tag.body) parts.push(tag.body);
+    }
+    return parts.join(' ');
+  }
+  return '';
+}
+
+/**
+ * Extract kicker/title/subtitle text from a card-shaped `hydratedContent.content`.
+ * Probe-confirmed layouts (2026-04-26 + 2026-07-07):
+ *   - content.headerV2.tombstoneHeader.{kicker,title}          (STAY_ALTERATION_PENDING)
+ *   - content.headerV2.actionHeader.{kicker,title}             (REQUEST_STAY_ALTERATION_CARD)
+ *   - content.sections[].sectionData.{kicker,title,subtitle}   (MessagingCardV2 —
+ *     STAYS_RTB_CARD_REQUEST tombstone_header, STAYS_RTB_CARD_CONFIRMED HEADER_TEXT)
+ * Joined as "kicker: title — subtitle" (existing tombstone convention extended).
+ */
+function extractCardHeaderText(content: Record<string, unknown> | undefined): string {
+  if (!content) return '';
+  const headers: Array<Record<string, unknown> | undefined> = [];
+
+  const headerV2 = content.headerV2 as Record<string, unknown> | undefined;
+  headers.push(headerV2?.tombstoneHeader as Record<string, unknown> | undefined);
+  headers.push(headerV2?.actionHeader as Record<string, unknown> | undefined);
+
+  const sections = Array.isArray(content.sections) ? content.sections : [];
+  for (const sectionUnknown of sections) {
+    const section = sectionUnknown as Record<string, unknown> | null;
+    const data = section?.sectionData as Record<string, unknown> | undefined;
+    if (data && (data.kicker || data.title || data.subtitle)) headers.push(data);
+  }
+
+  for (const header of headers) {
+    if (!header) continue;
+    const kicker = richTextBody(header.kicker);
+    const title = richTextBody(header.title);
+    const subtitle = richTextBody(header.subtitle);
+    const main = [kicker, title].filter(Boolean).join(': ');
+    const text = [main, subtitle].filter(Boolean).join(' — ');
+    if (text) return text;
+  }
+  return '';
+}
 
 /**
  * Extract routable text from a probe-confirmed `hydratedContent` shape.
@@ -879,27 +953,30 @@ export function extractText(message: unknown): MessageExtract {
       };
     }
     case 'VIEWER_BASED_CONTENT': {
-      // accountType is typically SERVICE here; classify as system regardless.
+      // Always classified as system, even when accountType is USER — probe
+      // 2026-07-07 saw STAYS_RTB_CARD_CONFIRMED as VIEWER_BASED with the HOST's
+      // own USER account. Resolve text: plain body/linkText, else card header.
       const body = typeof content?.body === 'string' ? content.body : '';
       const linkText = typeof content?.linkText === 'string' ? content.linkText : '';
-      const text = [body, linkText].filter(Boolean).join(' — ');
+      const text =
+        [body, linkText].filter(Boolean).join(' — ') || extractCardHeaderText(content);
       return { kind: 'system', text: text || `[viewer_based:${contentSubType}]` };
     }
     case 'TEMPLATE_CONTENT': {
-      // accountType is USER (alteration requests). Pull primary text out of the
-      // tombstoneHeader/kicker layout per probe shape.
-      const headerV2 = content?.headerV2 as Record<string, unknown> | undefined;
-      const tombstone = headerV2?.tombstoneHeader as Record<string, unknown> | undefined;
-      const title = tombstone?.title as Record<string, unknown> | undefined;
-      const titleBody = typeof title?.body === 'string' ? title.body : '';
-      const kicker = tombstone?.kicker as Record<string, unknown> | undefined;
-      const kickerBody = typeof kicker?.body === 'string' ? kicker.body : '';
-      const text = [kickerBody, titleBody].filter(Boolean).join(': ');
-      // System-routing for non-USER alterations (Airbnb auto-confirmations).
-      if (accountType === 'SERVICE') {
+      const text = extractCardHeaderText(content);
+      // System-routing for non-USER templates (Airbnb auto-confirmations).
+      if (SERVICE_ACCOUNT_TYPES.has(accountType)) {
         return { kind: 'system', text: text || `[template:${contentSubType}]` };
       }
-      return { kind: 'user', text: text || `[template:${contentSubType}]` };
+      if (text) {
+        // Resolved USER template (alteration/RTB request) — guest/host-authored
+        // action, emits under the real sender per spec v1.17.
+        return { kind: 'user', text };
+      }
+      // Empty tombstone: NEVER impersonate a user with a raw token (prod
+      // 2026-07-07 [template:STAYS_RTB_CARD_REQUEST] leak). Emit as system;
+      // the app quarantines the token (system-message-artifacts.ts).
+      return { kind: 'system', text: `[template:${contentSubType}]` };
     }
     case 'STATIC_BULLETIN_CONTENT':
       // Probe v3 captured this contentType but did not characterize the body
@@ -1081,6 +1158,8 @@ export function validateThreadResponse(
     hostMembership: 'missing',
     messagesReturned: 0,
     messagesEmitted: 0,
+    systemEmitted: 0,
+    emptyTemplateTombstones: 0,
     droppedSoftDelete: 0,
     droppedOrphanReaction: 0,
     droppedSystem: 0,
@@ -1183,7 +1262,7 @@ export function validateThreadResponse(
     /** Numeric form of parentMessageId if extractable; else null even when hasParentRef=true. */
     parentNumericId: string | null;
     createdAtMs: number;
-    sender: 'host' | 'guest';
+    sender: 'host' | 'guest' | 'system';
     extracted: MessageExtract;
     contentType: string;
     reactions: ScrapedMessageReaction[];
@@ -1239,6 +1318,12 @@ export function validateThreadResponse(
       diag.droppedSchema += 1;
       continue;
     }
+    // Invariant (spec v1.17): one Airbnb message id → at most ONE emitted item
+    // under exactly ONE sender. Duplicate ids within a page never fan out.
+    if (seenNumericIds.has(numericId)) {
+      diag.droppedSchema += 1;
+      continue;
+    }
 
     // Schema fingerprint per-message: id, account.accountId, createdAtMs.
     const account = msg.account as Record<string, unknown> | undefined;
@@ -1258,12 +1343,13 @@ export function validateThreadResponse(
     rawCreatedAtMs.push(createdAtMs);
 
     // Origin invariant: USER messages MUST have accountId in thread participants.
-    // SERVICE accountType is exempt — Airbnb's internal SERVICE accounts (e.g.
+    // Platform account types are exempt — Airbnb's internal SERVICE accounts (e.g.
     // viewer-based notifications, alteration auto-confirmations) are never listed
     // as participants but are still valid messages. Probe 2026-04-26 confirmed
-    // SERVICE accountIds are NOT in participants.edges. Spec §2 invariant
+    // SERVICE accountIds are NOT in participants.edges; probe 2026-07-07 saw
+    // EXTERNAL_SERVICE (accountId=2) on suggestion cards. Spec §2 invariant
     // narrows accordingly.
-    if (accountType !== 'SERVICE' && !participantAccountIds.has(accountId)) {
+    if (!SERVICE_ACCOUNT_TYPES.has(accountType) && !participantAccountIds.has(accountId)) {
       diag.droppedOriginInvariant += 1;
       continue;
     }
@@ -1287,18 +1373,33 @@ export function validateThreadResponse(
     diag.contentTypeCounts[contentType] = (diag.contentTypeCounts[contentType] ?? 0) + 1;
 
     const extracted = extractText(msg);
-    if (extracted.kind === 'system' || extracted.kind === 'placeholder') {
+    if (extracted.kind === 'placeholder') {
       diag.droppedSystem += 1;
       continue;
     }
 
-    // Sender per spec: SERVICE → already filtered as system; USER → host vs guest.
-    if (accountType === 'SERVICE') {
-      // Defensive: should have been caught as system above.
-      diag.droppedSystem += 1;
-      continue;
+    // Spec v1.17: system events EMIT with sender:'system' (the app persists
+    // message_type='system' and quarantines unresolved tokens — PR #643).
+    // Defensive: a service-account message that extracted as kind:'user' is
+    // still never attributed to guest/host.
+    const isSystem =
+      extracted.kind === 'system' || SERVICE_ACCOUNT_TYPES.has(accountType);
+    if (isSystem) {
+      diag.systemEmitted += 1;
+      if (
+        extracted.kind === 'system' &&
+        contentType === 'TEMPLATE_CONTENT' &&
+        !SERVICE_ACCOUNT_TYPES.has(accountType)
+      ) {
+        // USER template that fell back to the [template:…] token.
+        diag.emptyTemplateTombstones += 1;
+      }
     }
-    const sender: 'host' | 'guest' = accountId === hostNumericId ? 'host' : 'guest';
+    const sender: 'host' | 'guest' | 'system' = isSystem
+      ? 'system'
+      : accountId === hostNumericId
+        ? 'host'
+        : 'guest';
 
     // Parent reference for orphan-reaction drop check. We track BOTH:
     //   - hasParentRef: was parentMessageId set at all (=> message is a reply/reaction)
@@ -1558,6 +1659,8 @@ function makeEmptyThreadDiagnostics(opts: ThreadReaderOptions): ThreadDiagnostic
     hostMembership: 'missing',
     messagesReturned: 0,
     messagesEmitted: 0,
+    systemEmitted: 0,
+    emptyTemplateTombstones: 0,
     droppedSoftDelete: 0,
     droppedOrphanReaction: 0,
     droppedSystem: 0,
@@ -1596,6 +1699,8 @@ function mergeThreadDiagnostics(
     messagesEmitted: prev.messagesEmitted + next.messagesEmitted,
     droppedSoftDelete: prev.droppedSoftDelete + next.droppedSoftDelete,
     droppedOrphanReaction: prev.droppedOrphanReaction + next.droppedOrphanReaction,
+    systemEmitted: prev.systemEmitted + next.systemEmitted,
+    emptyTemplateTombstones: prev.emptyTemplateTombstones + next.emptyTemplateTombstones,
     droppedSystem: prev.droppedSystem + next.droppedSystem,
     droppedSchema: prev.droppedSchema + next.droppedSchema,
     droppedOriginInvariant: prev.droppedOriginInvariant + next.droppedOriginInvariant,
